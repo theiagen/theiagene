@@ -52,6 +52,7 @@ from theiagene.lib.query import (  # noqa: F401
     ordered_query_genes,
 )
 from theiagene.lib.vcf import extract_vcf_genes, flatten_coords_by_contig  # noqa: F401
+from theiagene.lib.gff import iter_gff_features
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -207,6 +208,52 @@ def build_gene_models_gbff(
     return models_by_key
 
 
+# GFF3 attribute keys used to group multi-segment CDS lines into one gene, in
+# preference order; all segments of a CDS share these (Parent/ID especially)
+_GFF_GROUP_KEYS = ("Parent", "ID", "locus_tag", "gene", "protein_id")
+
+
+def _group_gff_cds(reference_gff: str, feature_type: str, id_qualifiers) -> list:
+    """Group GFF CDS lines into one entry per gene.
+
+    A multi-exon CDS is spread over several GFF lines that share an ``ID`` (or
+    ``Parent``); this collapses them into a single group carrying every segment
+    and the identifiers used for query matching.  Returns the groups in
+    first-seen order for deterministic model registration."""
+    groups = {}
+    order = []
+    for feature in iter_gff_features(reference_gff, feature_type):
+        attrs = feature["attributes"]
+        identifiers = [attrs[q] for q in id_qualifiers if q in attrs]
+        if not identifiers:
+            continue
+        # pick the first available grouping key so exon segments coalesce
+        group_id = None
+        for key in _GFF_GROUP_KEYS:
+            if key in attrs:
+                group_id = (feature["seqid"], key, attrs[key])
+                break
+        if group_id is None:
+            # no grouping attribute: treat this single line as its own gene
+            group_id = (feature["seqid"], "line", feature["start"], feature["end"])
+        group = groups.get(group_id)
+        if group is None:
+            group = {
+                "seqid": feature["seqid"],
+                "strand": feature["strand"],
+                "attributes": attrs,
+                "identifiers": [],
+                "parts": [],
+            }
+            groups[group_id] = group
+            order.append(group_id)
+        group["parts"].append((feature["start"], feature["end"]))
+        for ident in identifiers:
+            if ident not in group["identifiers"]:
+                group["identifiers"].append(ident)
+    return [groups[group_id] for group_id in order]
+
+
 def build_gene_models_gff(
     reference_gff: str,
     reference_fa: str,
@@ -220,86 +267,77 @@ def build_gene_models_gff(
     """Parse a GFF and genome FA into {lookup_key: GeneModel} for every query gene.
 
     A CDS is matched by the ``feature_qualifier`` value plus its ``gene``,
-    ``locus_tag`` and ``protein_id`` qualifiers, so query sets may mix product
-    names and locus tags.  A model is registered under many lookup keys (raw,
-    sanitized and normalized forms of every identifier) so it can be recovered
-    from whatever identifier the VCF ``GENE`` field carries."""
+    ``locus_tag`` and ``protein_id`` attributes, so query sets may mix product
+    names and locus tags.  Multi-exon CDS lines are grouped (by ``ID``/``Parent``)
+    and assembled in translation order into a single coding model, mirroring the
+    GBFF backend.  A model is registered under many lookup keys (raw, sanitized
+    and normalized forms of every identifier) so it can be recovered from
+    whatever identifier the VCF ``GENE`` field carries.
+
+    The coding phase column is not applied; as with the GBFF backend, each CDS
+    is assumed to begin on a codon boundary."""
     query_list = list(query_genes)
+    qualifier = feature_qualifier.strip()
     # this may need to be exposed to enable user-modification
-    id_qualifiers = [feature_qualifier.strip(), "gene", "locus_tag", "protein_id"]
-    models_by_key = {}
+    id_qualifiers = [qualifier, "gene", "locus_tag", "protein_id"]
     fa_dict = SeqIO.to_dict(SeqIO.parse(reference_fa, "fasta"))
-    with open(reference_gff) as handle:
-        for record in handle:
-            record_id, source, obs_type, start, end, score, strand, phase, attributes = record.split("\t")
-            # inefficient query check to determine BAM reference check
+    models_by_key = {}
 
-            contig_seq = fa_dict[record_id].seq
-            if obs_type.lower() == feature_type.lower():
-                identifiers = []
-                for qualifier in id_qualifiers:
-                    qualifier_search = re.search(qualifier + r"=([^;+])[;|$]", attributes)
-                    if qualifier_search:
-                        qualifier_id = qualifier_search[0]
-                        identifiers.append(qualifier_id)
-                if not identifiers:
-                    continue
+    for group in _group_gff_cds(reference_gff, feature_type, id_qualifiers):
+        identifiers = group["identifiers"]
+        matched_query = match_query(query_list, identifiers, exact_match)
+        if matched_query is None:
+            continue
 
-                matched_query = match_query(query_list, identifiers, exact_match)
-                if matched_query is None:
-                    continue
+        record_id = group["seqid"]
+        strand = group["strand"]
+        if strand not in (1, -1):
+            logger.warning(
+                f"Skipping '{matched_query}' on {record_id}: "
+                f"unresolved strand ({strand})"
+            )
+            continue
 
-                strand = feature.location.strand
-                if strand not in (1, -1):
-                    logger.warning(
-                        f"Skipping '{matched_query}' on {record.name}: "
-                        f"unresolved strand ({strand})"
-                    )
-                    continue
+        # check appropriate contig is used for the VCF and available in the FASTA
+        if record_id not in contig_names:
+            raise KeyError(f"{record_id} not in VCF")
+        if record_id not in fa_dict:
+            raise KeyError(f"{record_id} not in reference FASTA")
+        contig_seq = str(fa_dict[record_id].seq)
 
-                if transl_table_override is not None:
-                    transl_table = transl_table_override
-                else:
-                    transl_table = int(
-                        feature.qualifiers.get("transl_table", ["1"])[0]
-                    )
+        attrs = group["attributes"]
+        if transl_table_override is not None:
+            transl_table = transl_table_override
+        else:
+            transl_table = int(attrs.get("transl_table", "1"))
 
-                product_vals = feature.qualifiers.get(feature_qualifier.strip())
-                product = product_vals[0] if product_vals else matched_query
-                gene_id = normalize_name(matched_query)
+        product = attrs.get(qualifier, matched_query)
+        gene_id = normalize_name(matched_query)
 
-                record_id = record.id
-                # check appropriate query is use for VCF contigs
-                if record_id not in contig_names:
-                    record_id = record.name
-                    if record_id not in contig_names:
-                        raise KeyError(f"{record.id} and {record.name} not in VCF")
+        model = GeneModel(
+            gene_id=gene_id,
+            product=product,
+            contig=record_id,
+            strand=strand,
+            transl_table=transl_table,
+        )
+        model.genomic_positions = _ordered_genomic_positions(group["parts"], strand)
+        model.finalize(contig_seq)
 
-                model = GeneModel(
-                    gene_id=gene_id,
-                    product=product,
-                    contig=record_id,
-                    strand=strand,
-                    transl_table=transl_table,
+        keys = set()
+        for ident in identifiers + [matched_query, product, gene_id]:
+            keys.update(
+                (ident, sanitize_info_value(ident), normalize_name(ident))
+            )
+        for key in keys:
+            if not key:
+                continue
+            if key in models_by_key and models_by_key[key] is not model:
+                logger.warning(
+                    f"'{key}' recovered multiple times; keeping first"
                 )
-                parts = [(int(p.start), int(p.end)) for p in feature.location.parts]
-                model.genomic_positions = _ordered_genomic_positions(parts, strand)
-                model.finalize(contig_seq)
-
-                keys = set()
-                for ident in identifiers + [matched_query, product, gene_id]:
-                    keys.update(
-                        (ident, sanitize_info_value(ident), normalize_name(ident))
-                    )
-                for key in keys:
-                    if not key:
-                        continue
-                    if key in models_by_key and models_by_key[key] is not model:
-                        logger.warning(
-                            f"'{key}' recovered multiple times; keeping first"
-                        )
-                    else:
-                        models_by_key[key] = model
+            else:
+                models_by_key[key] = model
     return models_by_key
 
 

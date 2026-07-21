@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from theiagene.lib import query, sequence, io_utils
+from theiagene.lib import query, sequence, io_utils, gff
 
 
 # --------------------------------------------------------------------------- #
@@ -103,3 +103,60 @@ def test_write_json_spoofs_cromwell_on_empty(tmp_path):
     out = tmp_path / "empty.json"
     io_utils.write_json(str(out), {})
     assert out.read_text() == '{"": 0}'
+
+
+# --------------------------------------------------------------------------- #
+# theiagene.lib.gff
+# --------------------------------------------------------------------------- #
+
+def test_parse_gff_attributes_splits_and_percent_decodes():
+    parsed = gff.parse_gff_attributes("ID=cds-1;product=lanosterol%2014-alpha;gene=ERG11;")
+    assert parsed == {
+        "ID": "cds-1",
+        "product": "lanosterol 14-alpha",  # %20 decoded to a space
+        "gene": "ERG11",
+    }
+
+
+def test_parse_gff_attributes_ignores_malformed_fields():
+    assert gff.parse_gff_attributes("") == {}
+    assert gff.parse_gff_attributes("novalue;ID=x") == {"ID": "x"}
+
+
+def test_iter_gff_features_converts_coordinates_and_strand(tmp_path):
+    path = tmp_path / "f.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "chr1\t.\tCDS\t10\t33\t.\t+\t0\tID=a;product=alpha\n"
+        "chr2\t.\tCDS\t6\t17\t.\t-\t0\tID=b;product=beta\n"
+    )
+    feats = list(gff.iter_gff_features(str(path), "CDS"))
+    assert len(feats) == 2
+    # GFF 1-based-inclusive [10, 33] -> 0-based half-open [9, 33)
+    assert (feats[0]["seqid"], feats[0]["start"], feats[0]["end"], feats[0]["strand"]) == (
+        "chr1", 9, 33, 1
+    )
+    assert feats[1]["strand"] == -1
+    assert feats[0]["attributes"]["product"] == "alpha"
+
+
+def test_iter_gff_features_skips_comments_blanks_fasta_and_other_types(tmp_path):
+    path = tmp_path / "f.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "\n"
+        "chr1\t.\tgene\t1\t100\t.\t+\t.\tID=g\n"        # wrong feature type
+        "chr1\t.\tCDS\t10\t33\t.\t+\t0\tID=a;product=alpha\n"
+        "##FASTA\n"
+        "chr1\t.\tCDS\t1\t3\t.\t+\t0\tID=ignored\n"     # after ##FASTA: ignored
+    )
+    feats = list(gff.iter_gff_features(str(path), "CDS"))
+    assert len(feats) == 1
+    assert feats[0]["attributes"]["ID"] == "a"
+
+
+def test_iter_gff_features_marks_unresolved_strand_as_none(tmp_path):
+    path = tmp_path / "f.gff"
+    path.write_text("chr1\t.\tCDS\t10\t33\t.\t.\t0\tID=a\n")
+    feats = list(gff.iter_gff_features(str(path), "CDS"))
+    assert feats[0]["strand"] is None

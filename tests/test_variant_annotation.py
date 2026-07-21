@@ -102,6 +102,37 @@ def _write_vcf(path, contig, contig_len, rows, with_sample=False):
     path.write_text("\n".join(lines) + "\n")
 
 
+def _make_gff_and_fa(gff_path, fa_path):
+    """Write a GFF3 + FASTA describing the same forward, reverse and two-exon
+    genes as ``_make_gbff``, so the GFF backend can be checked for equivalence."""
+    beta_coding = "ATGTATAAATGA"
+    beta_genomic = str(Seq(beta_coding).reverse_complement())
+    seqs = {
+        "chr1": "A" * ALPHA_START + ALPHA_CODING + "A" * 7,
+        "chr2": "C" * 5 + beta_genomic + "C" * 5,
+        "chr3": "ATGTAT" + "GGGG" + "AAATGA" + "A" * 4,
+    }
+    records = [SeqRecord(Seq(s), id=cid, description="") for cid, s in seqs.items()]
+    with open(fa_path, "w") as handle:
+        SeqIO.write(records, handle, "fasta")
+
+    # GFF is 1-based, both-inclusive: 0-based [s, e) -> columns (s + 1, e)
+    lines = [
+        "##gff-version 3",
+        "# comment lines and blank lines must be tolerated",
+        "",
+        # chr1 alpha forward: genomic [9, 33)
+        "chr1\t.\tCDS\t10\t33\t.\t+\t0\tID=cds-alpha;product=test gene alpha",
+        # chr2 beta reverse: genomic [5, 17)
+        "chr2\t.\tCDS\t6\t17\t.\t-\t0\tID=cds-beta;product=test gene beta",
+        # chr3 gamma two-exon forward: [0, 6) and [10, 16), sharing one CDS ID
+        "chr3\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-gamma;product=test gene gamma",
+        "chr3\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-gamma;product=test gene gamma",
+    ]
+    with open(gff_path, "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
 @pytest.fixture
 def gbff(tmp_path):
     path = tmp_path / "ref.gbff"
@@ -109,8 +140,20 @@ def gbff(tmp_path):
     return str(path)
 
 
+@pytest.fixture
+def gff_fa(tmp_path):
+    gff = tmp_path / "ref.gff"
+    fa = tmp_path / "ref.fa"
+    _make_gff_and_fa(gff, fa)
+    return str(gff), str(fa)
+
+
 def _annotate(gbff, vcf, query=("test gene alpha",), exact=True):
     return va.run(vcf, gbff, None, None, list(query), exact_match=exact)
+
+
+def _annotate_gff(gff, fa, vcf, query=("test gene alpha",), exact=True):
+    return va.run(vcf, None, gff, fa, list(query), exact_match=exact)
 
 
 # --------------------------------------------------------------------------- #
@@ -427,6 +470,69 @@ def test_delins_stop_gained_anchors_at_new_stop(gbff, tmp_path):
     _write_vcf(vcf, "chr1", 40, [(17, "CCA", "GCT")])  # POS 17 == c.8
     report = _annotate(gbff, str(vcf))
     assert "stop_gained c.8_10delinsGCT p.Lys4Ter" in report
+
+
+# --------------------------------------------------------------------------- #
+# GFF + FASTA backend (equivalence with the GBFF backend)
+# --------------------------------------------------------------------------- #
+
+def test_gff_gene_model_matches_biopython_extract(gff_fa):
+    """Coding sequences built from GFF+FASTA must equal BioPython's extract."""
+    gff, fa = gff_fa
+    contigs = {rec.id for rec in SeqIO.parse(fa, "fasta")}
+    for product, expected in (
+        ("test gene alpha", "ATGTATCCCAAAGGGTTTCATTGA"),
+        ("test gene beta", "ATGTATAAATGA"),
+        ("test gene gamma", "ATGTATAAATGA"),
+    ):
+        models = va.build_gene_models_gff(
+            gff, fa, contigs, [product], "CDS", "product", exact_match=True
+        )
+        assert models[product].ref_coding == expected
+
+
+def test_gff_missense_matches_gbff(gff_fa, tmp_path):
+    gff, fa = gff_fa
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chr1", 40, [(14, "A", "T")])  # c.5 A>T, Tyr2Phe
+    report = _annotate_gff(gff, fa, str(vcf))
+    assert "missense_variant c.5A>T p.Tyr2Phe" in report
+    assert report.startswith("test.gene.alpha: test gene alpha (")
+
+
+def test_gff_reverse_strand_missense_matches_gbff(gff_fa, tmp_path):
+    gff, fa = gff_fa
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chr2", 22, [(13, "T", "A")])
+    report = _annotate_gff(gff, fa, str(vcf), query=("test gene beta",))
+    assert "missense_variant c.5A>T p.Tyr2Phe" in report
+
+
+def test_gff_multi_exon_missense_matches_gbff(gff_fa, tmp_path):
+    gff, fa = gff_fa
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chr3", 20, [(12, "A", "G")])  # exon2 c.8 A>G -> Lys3Arg
+    report = _annotate_gff(gff, fa, str(vcf), query=("test gene gamma",))
+    assert "missense_variant c.8A>G p.Lys3Arg" in report
+
+
+def test_gff_and_gbff_reports_are_identical(gbff, gff_fa, tmp_path):
+    """The two backends must produce byte-identical reports for the same VCF."""
+    gff, fa = gff_fa
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chr1", 40, [(14, "A", "T"), (18, "C", "T")])
+    from_gbff = _annotate(gbff, str(vcf))
+    from_gff = _annotate_gff(gff, fa, str(vcf))
+    assert from_gff == from_gbff
+
+
+def test_gff_raises_when_contig_absent_from_vcf(gff_fa, tmp_path):
+    gff, fa = gff_fa
+    vcf = tmp_path / "v.vcf"
+    # a VCF whose only contig is unrelated to the GFF seqids
+    _write_vcf(vcf, "chrX", 40, [(14, "A", "T")])
+    with pytest.raises(KeyError, match="not in VCF"):
+        _annotate_gff(gff, fa, str(vcf))
 
 
 # --------------------------------------------------------------------------- #

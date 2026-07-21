@@ -27,6 +27,7 @@ from theiagene.lib.query import (  # noqa: F401
 )
 from theiagene.lib.io_utils import write_json  # noqa: F401
 from theiagene.lib.vcf import extract_vcf_genes  # noqa: F401
+from theiagene.lib.gff import iter_gff_features
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -35,8 +36,10 @@ logger = logging.getLogger(__name__)
 
 def input_error_handling(args: argparse.Namespace) -> None:
     """Handle incompatible input arguments"""
-    if not args.bedfile and not args.reference_gbff:
-        raise FileNotFoundError("'reference_gbff' or 'bedfile' is required")
+    if not args.bedfile and not args.reference_gbff and not args.reference_gff:
+        raise FileNotFoundError(
+            "'reference_gbff', 'reference_gff', or 'bedfile' is required"
+        )
     elif not args.query_genes and not args.bedfile:
         raise ValueError("'query_genes' or 'bedfile' required")
 
@@ -51,33 +54,26 @@ def parse_gff(
     contig2query2coords: dict,
     ambiguous_contig: bool
 ) -> dict:
-    """Parse a GFF to obtain query coordinates"""
+    """Parse a GFF to obtain query coordinates.
 
-    with open(reference_gff) as handle:
-        for record in handle:
-            record_id, source, obs_type, start, end, score, strand, phase, attributes = record.split("\t")
-            # inefficient query check to determine BAM reference check
+    Each matching feature line contributes one coordinate part; multi-segment
+    (multi-exon) genes therefore accumulate several parts under the same query,
+    exactly as ``parse_bed`` accumulates multiple BED rows."""
+    qualifier = feature_qualifier.strip()
+    for feature in iter_gff_features(reference_gff, feature_type):
+        # is there the qualifier that we want?
+        qualifier_id = feature["attributes"].get(qualifier)
+        if qualifier_id is None:
+            continue
+        # is this an entry we want?
+        if id_check(query_set, qualifier_id):
+            record_id = feature["seqid"]
             if record_id not in bam_references and not ambiguous_contig:
                 raise KeyError(f"{record_id} not in BAM")
-            # is this the feature we want to scan?
-            if obs_type.lower() == feature_type.lower():
-                qualifier_search = re.search(feature_qualifier + r"=([^;+])[;|$]", attributes)
-                if qualifier_search:
-                    qualifier_id = qualifier_search[0]
-                    # is this a qualifying feature?
-                    if id_check(query_set, qualifier_id):
-                        if qualifier_id in contig2query2coords[record_id]:
-                            logger.warning(
-                                f"{qualifier_id} recovered multiple times in {record_id}"
-                            )
-                        # GenBanks are 1-based coordinates, though BioPython adjusts natively
-                        loc_coords = [
-                            [int(x.start), int(x.end)]
-                            for x in feature.location.parts
-                        ]
-                        contig2query2coords[record_id][qualifier_id].extend(
-                            loc_coords
-                        )
+            # iter_gff_features already converts to 0-based, half-open coordinates
+            contig2query2coords[record_id][qualifier_id].append(
+                (feature["start"], feature["end"])
+            )
     return contig2query2coords
 
 
@@ -297,7 +293,7 @@ def run_cli(args: argparse.Namespace) -> int:
     elif args.reference_gff:
         contig2query2coords = parse_gff(
             set(imported_bam.references),
-            args.reference_gbff,
+            args.reference_gff,
             query_set,
             args.feature_type,
             args.feature_qualifier,

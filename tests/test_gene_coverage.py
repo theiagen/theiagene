@@ -100,6 +100,104 @@ def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
     assert gbff_coords == bed_coords == [(10, 20)]
 
 
+class _Args:
+    def __init__(self, **kwargs):
+        self.bedfile = None
+        self.reference_gbff = None
+        self.reference_gff = None
+        self.query_genes = None
+        self.__dict__.update(kwargs)
+
+
+def test_input_error_handling_accepts_reference_gff():
+    # a GFF reference with query genes is a valid invocation (regression: the
+    # GFF option used to be rejected because only GBFF/BED were recognized)
+    gene_coverage.input_error_handling(
+        _Args(reference_gff="ref.gff", query_genes=["geneA"])
+    )
+
+
+def test_input_error_handling_requires_a_coordinate_source():
+    with pytest.raises(FileNotFoundError, match="reference_gff"):
+        gene_coverage.input_error_handling(_Args(query_genes=["geneA"]))
+
+
+def test_input_error_handling_requires_query_genes_without_bed():
+    with pytest.raises(ValueError, match="query_genes"):
+        gene_coverage.input_error_handling(_Args(reference_gff="ref.gff"))
+
+
+def test_parse_gff_extracts_expected_coordinates(tmp_path):
+    # GFF is 1-based, both-inclusive; geneA at 1-based [11, 20] == 0-based [10, 20)
+    gff = tmp_path / "mock.gff"
+    gff.write_text(
+        "##gff-version 3\n"
+        "contig1\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
+    )
+    parsed = gene_coverage.parse_gff(
+        {"contig1"},
+        str(gff),
+        {"geneA"},
+        "CDS",
+        "product",
+        gene_coverage.exact_check,
+        defaultdict(lambda: defaultdict(list)),
+        False,
+    )
+    assert parsed["contig1"]["geneA"] == [(10, 20)]
+
+
+def test_gff_and_bed_coordinates_agree_for_same_gene(tmp_path):
+    gff = tmp_path / "mock.gff"
+    gff.write_text(
+        "##gff-version 3\n"
+        "# a comment line that must be skipped\n"
+        "contig1\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
+    )
+    bed = tmp_path / "mock.bed"
+    bed.write_text("contig1\t10\t20\tgeneA\n")
+
+    from_gff = gene_coverage.parse_gff(
+        {"contig1"}, str(gff), {"geneA"}, "CDS", "product",
+        gene_coverage.exact_check, defaultdict(lambda: defaultdict(list)), False,
+    )
+    from_bed = gene_coverage.parse_bed(
+        {"contig1"}, str(bed), {"geneA"}, gene_coverage.exact_check,
+        defaultdict(lambda: defaultdict(list)), False,
+    )
+    gff_coords = [tuple(x) for x in from_gff["contig1"]["geneA"]]
+    bed_coords = [tuple(x) for x in from_bed["contig1"]["geneA"]]
+    assert gff_coords == bed_coords == [(10, 20)]
+
+
+def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
+    # two CDS lines for the same gene accumulate as two coordinate parts
+    gff = tmp_path / "multi.gff"
+    gff.write_text(
+        "##gff-version 3\n"
+        "contig1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;product=geneA\n"
+        "contig1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;product=geneA\n"
+    )
+    parsed = gene_coverage.parse_gff(
+        {"contig1"}, str(gff), {"geneA"}, "CDS", "product",
+        gene_coverage.exact_check, defaultdict(lambda: defaultdict(list)), False,
+    )
+    assert parsed["contig1"]["geneA"] == [(0, 6), (10, 16)]
+
+
+def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
+    gff = tmp_path / "mock.gff"
+    gff.write_text(
+        "##gff-version 3\n"
+        "otherContig\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
+    )
+    with pytest.raises(KeyError, match="otherContig not in BAM"):
+        gene_coverage.parse_gff(
+            {"contig1"}, str(gff), {"geneA"}, "CDS", "product",
+            gene_coverage.exact_check, defaultdict(lambda: defaultdict(list)), False,
+        )
+
+
 def test_quantify_gene_coverage_known_depth_and_breadth():
     mock_bam = MockBam(
         references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
