@@ -5,6 +5,8 @@ from the same reference formats (GenBank/GFF3, plus BED for coverage).  This
 module holds the reading, multi-exon grouping and identifier-matching they share,
 so each command keeps only its own object-construction step:
 
+- :func:`parse_gff_attributes` / :func:`iter_gff_features` are the low-level GFF3
+  readers (column-9 attribute parsing and 0-based-half-open feature iteration).
 - :func:`iter_gbff_raw` / :func:`iter_gff_raw` yield a neutral :class:`RawGene`
   per candidate feature (pre-match, no naming) -- ``gene_coverage`` turns these
   into :class:`~theiagene.lib.gene_model.Gene` objects, ``variant_annotation``
@@ -17,12 +19,70 @@ so each command keeps only its own object-construction step:
 """
 
 from collections import namedtuple
+from urllib.parse import unquote
 
 from Bio import SeqIO
 
 from theiagene.lib.gene_model import Gene
-from theiagene.lib.gff import iter_gff_features
 from theiagene.lib.query import exact_check, substring_check, match_query
+
+
+# GFF strand column -> BioPython-style strand integer ('.'/'?' -> None)
+GFF_STRAND = {"+": 1, "-": -1}
+
+
+def parse_gff_attributes(attributes: str, field_delimiter: str = ";", value_delimiter: str = "=") -> dict:
+    """Parse a GFF3 column-9 attribute string into a {key: value} dict.
+
+    Values are percent-decoded per the GFF3 spec.  An empty attribute column
+    yields an empty dict; a malformed field (one lacking the value delimiter)
+    raises ``ValueError``.  Duplicate keys keep the last occurrence."""
+    stripped = attributes.strip().strip(";")
+    if not stripped:
+        return {}
+    parsed = {}
+    for field in stripped.split(field_delimiter):
+        field = field.strip()
+        try:
+            key, value = field.split(value_delimiter, 1)
+        except ValueError:
+            raise ValueError(f"unexpected attributes field: {field}")
+        parsed[key.strip()] = unquote(value.strip())
+    return parsed
+
+
+def iter_gff_features(reference_gff: str, feature_type: str):
+    """Yield features of ``feature_type`` from a GFF3 file.
+
+    Comment/directive lines, blank lines, malformed (non 9-column) lines and any
+    embedded ``##FASTA`` section are skipped.  Each yielded feature is a dict
+    with keys ``seqid``, ``start`` (0-based), ``end`` (half-open), ``strand``
+    (1/-1/None), ``phase`` and ``attributes`` (a parsed dict)."""
+    with open(reference_gff) as handle:
+        for line in handle:
+            line = line.rstrip("\n")
+            # a '##FASTA' directive ends the annotation section
+            if line.startswith("##FASTA"):
+                break
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) != 9:
+                raise ValueError(f"incorrectly formatted GFF: {len(fields)} fields recovered; 9 expected")
+            seqid, source, obs_type, start, end, score, strand, phase, attributes = fields
+            if obs_type.lower() != feature_type.lower():
+                continue
+            yield {
+                "seqid": seqid,
+                "source": source,
+                # GFF columns are 1-based, both-inclusive; convert to 0-based, half-open
+                "start": int(start) - 1,
+                "end": int(end),
+                "score": score,
+                "strand": GFF_STRAND.get(strand),
+                "phase": phase,
+                "attributes": parse_gff_attributes(attributes),
+            }
 
 
 # a neutral, pre-match feature: coordinates + metadata, no query naming applied.

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from theiagene.lib import query, sequence, io_utils, gff, gene_model, parsers
+from theiagene.lib import query, sequence, io_utils, gene_model, parsers
 
 
 # --------------------------------------------------------------------------- #
@@ -106,11 +106,11 @@ def test_write_json_spoofs_cromwell_on_empty(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# theiagene.lib.gff
+# theiagene.lib.parsers -- low-level GFF3 readers
 # --------------------------------------------------------------------------- #
 
 def test_parse_gff_attributes_splits_and_percent_decodes():
-    parsed = gff.parse_gff_attributes("ID=cds-1;product=lanosterol%2014-alpha;gene=ERG11;")
+    parsed = parsers.parse_gff_attributes("ID=cds-1;product=lanosterol%2014-alpha;gene=ERG11;")
     assert parsed == {
         "ID": "cds-1",
         "product": "lanosterol 14-alpha",  # %20 decoded to a space
@@ -120,19 +120,19 @@ def test_parse_gff_attributes_splits_and_percent_decodes():
 
 def test_parse_gff_attributes_empty_column_is_empty_dict():
     # an empty (or bare-';') attribute column is valid GFF3, not malformed
-    assert gff.parse_gff_attributes("") == {}
-    assert gff.parse_gff_attributes(";") == {}
+    assert parsers.parse_gff_attributes("") == {}
+    assert parsers.parse_gff_attributes(";") == {}
 
 
 def test_parse_gff_attributes_raises_on_malformed_field():
     # a field lacking the value delimiter is malformed and must raise
     with pytest.raises(ValueError, match="unexpected attributes field"):
-        gff.parse_gff_attributes("novalue;ID=x")
+        parsers.parse_gff_attributes("novalue;ID=x")
 
 
 def test_parse_gff_attributes_keeps_value_containing_delimiter():
     # only the first '=' splits key from value, so an '=' in the value survives
-    assert gff.parse_gff_attributes("note=a=b") == {"note": "a=b"}
+    assert parsers.parse_gff_attributes("note=a=b") == {"note": "a=b"}
 
 
 def test_iter_gff_features_converts_coordinates_and_strand(tmp_path):
@@ -142,7 +142,7 @@ def test_iter_gff_features_converts_coordinates_and_strand(tmp_path):
         "chr1\t.\tCDS\t10\t33\t.\t+\t0\tID=a;product=alpha\n"
         "chr2\t.\tCDS\t6\t17\t.\t-\t0\tID=b;product=beta\n"
     )
-    feats = list(gff.iter_gff_features(str(path), "CDS"))
+    feats = list(parsers.iter_gff_features(str(path), "CDS"))
     assert len(feats) == 2
     # GFF 1-based-inclusive [10, 33] -> 0-based half-open [9, 33)
     assert (feats[0]["seqid"], feats[0]["start"], feats[0]["end"], feats[0]["strand"]) == (
@@ -162,7 +162,7 @@ def test_iter_gff_features_skips_comments_blanks_fasta_and_other_types(tmp_path)
         "##FASTA\n"
         "chr1\t.\tCDS\t1\t3\t.\t+\t0\tID=ignored\n"     # after ##FASTA: ignored
     )
-    feats = list(gff.iter_gff_features(str(path), "CDS"))
+    feats = list(parsers.iter_gff_features(str(path), "CDS"))
     assert len(feats) == 1
     assert feats[0]["attributes"]["ID"] == "a"
 
@@ -170,7 +170,7 @@ def test_iter_gff_features_skips_comments_blanks_fasta_and_other_types(tmp_path)
 def test_iter_gff_features_marks_unresolved_strand_as_none(tmp_path):
     path = tmp_path / "f.gff"
     path.write_text("chr1\t.\tCDS\t10\t33\t.\t.\t0\tID=a\n")
-    feats = list(gff.iter_gff_features(str(path), "CDS"))
+    feats = list(parsers.iter_gff_features(str(path), "CDS"))
     assert feats[0]["strand"] is None
 
 
@@ -222,7 +222,7 @@ def test_genemodel_minus_strand_sequences_are_coding_oriented():
 
 
 # --------------------------------------------------------------------------- #
-# theiagene.lib.parsers
+# theiagene.lib.parsers -- RawGene streams, matching, BED
 # --------------------------------------------------------------------------- #
 
 def test_match_identifiers_normalize_is_query_aware():
