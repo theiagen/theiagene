@@ -13,7 +13,7 @@ from urllib.parse import unquote
 GFF_STRAND = {"+": 1, "-": -1}
 
 
-def parse_gff_attributes(attributes: str, field_delimiter: str ";", value_delimiter: str "=") -> dict:
+def parse_gff_attributes(attributes: str, field_delimiter: str = ";", value_delimiter: str = "=") -> dict:
     """Parse a GFF3 column-9 attribute string into a {key: value} dict.
 
     Values are percent-decoded per the GFF3 spec.  Fields without an '=' are
