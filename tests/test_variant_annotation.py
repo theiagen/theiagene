@@ -281,6 +281,54 @@ def test_frameshift_suppresses_downstream_only(gbff, tmp_path):
     assert "c.17" not in report        # downstream suppressed
 
 
+def test_variant_downstream_of_frameshift_is_not_annotated(gbff, tmp_path):
+    # a frameshift and one variant strictly 3' of it: the frameshift is reported
+    # but the downstream variant is dropped because the frameshift invalidates
+    # every codon after it. The downstream c.17T>C would be a Phe6Ser missense on
+    # its own, so its absence proves suppression rather than an inert change.
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(
+        vcf,
+        "chr1",
+        40,
+        [
+            (21, "AG", "A"),   # c.13  frameshift (kept)
+            (26, "T", "C"),    # c.17  downstream of the frameshift (suppressed)
+        ],
+    )
+    report = _annotate(gbff, str(vcf))
+    assert "frameshift_variant c.13delG p.Gly5fs" in report
+    assert "c.17" not in report                  # downstream variant suppressed
+    assert report.count("test.gene.alpha:") == 1  # only the frameshift survives
+
+
+def test_annotate_downstream_of_frameshift_flag_keeps_downstream(gbff, tmp_path):
+    # the same frameshift + downstream pair as above, but with suppression
+    # disabled: both the frameshift and the 3' c.17T>C (Phe6Ser) are annotated.
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(
+        vcf,
+        "chr1",
+        40,
+        [
+            (21, "AG", "A"),   # c.13  frameshift
+            (26, "T", "C"),    # c.17  downstream of the frameshift
+        ],
+    )
+    report = va.run(
+        str(vcf),
+        gbff,
+        None,
+        None,
+        ["test gene alpha"],
+        exact_match=True,
+        suppress_downstream_frameshift=False,
+    )
+    assert "frameshift_variant c.13delG p.Gly5fs" in report
+    assert "missense_variant c.17T>C p.Phe6Ser" in report
+    assert report.count("test.gene.alpha:") == 2  # both variants survive
+
+
 # --------------------------------------------------------------------------- #
 # reverse strand and multi-exon
 # --------------------------------------------------------------------------- #

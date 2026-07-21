@@ -19,8 +19,10 @@ For each variant it determines whether a substitution is
 * ``stop_lost``/``start_lost`` (edge substitutions),
 
 and whether an indel is an ``inframe_deletion``, ``inframe_insertion`` or a
-``frameshift_variant``.  A frameshift invalidates every downstream codon, so all
-variants that fall 3' of a frameshift within the same gene are disregarded.
+``frameshift_variant``.  A frameshift invalidates every downstream codon, so by
+default all variants that fall 3' of a frameshift within the same gene are
+disregarded; pass ``--annotate_downstream_of_frameshift`` (or
+``suppress_downstream_frameshift=False``) to annotate them anyway.
 
 The report is emitted as a single string, one entry per surviving variant::
 
@@ -621,11 +623,15 @@ def genes_for_record(record, interval_index: dict) -> list:
     return models
 
 
-def annotate_vcf(vcf, models_by_key: dict) -> list:
+def annotate_vcf(
+    vcf, models_by_key: dict, suppress_downstream_frameshift: bool = True
+) -> list:
     """Annotate every query-gene variant in a VCF.
 
-    Returns a list of annotation dicts in VCF read order, after dropping every
-    variant that lies downstream (3') of a frameshift within the same gene."""
+    Returns a list of annotation dicts in VCF read order.  By default every
+    variant that lies downstream (3') of a frameshift within the same gene is
+    dropped, because a frameshift invalidates every codon after it; set
+    ``suppress_downstream_frameshift=False`` to annotate those variants anyway."""
     interval_index = defaultdict(list)
     for model in set(models_by_key.values()):
         if model.genomic_start is not None:
@@ -677,7 +683,10 @@ def annotate_vcf(vcf, models_by_key: dict) -> list:
                 annotations.append(ann)
         read_order += 1
 
-    return _apply_frameshift_suppression(annotations)
+    if suppress_downstream_frameshift:
+        return _apply_frameshift_suppression(annotations)
+    annotations.sort(key=lambda a: a["read_order"])
+    return annotations
 
 
 def _apply_frameshift_suppression(annotations: list) -> list:
@@ -737,6 +746,7 @@ def run(
     feature_qualifier: str = "product",
     exact_match: bool = False,
     transl_table: int = None,
+    suppress_downstream_frameshift: bool = True,
 ) -> str:
     """Annotate a VCF and return the report string"""
     query_arg = query_genes if isinstance(query_genes, (list, tuple)) else [query_genes]
@@ -767,7 +777,9 @@ def run(
         )
     else:
         raise FileNotFoundError("GBFF or GFF and FASTA not provided")
-    annotations = annotate_vcf(vcf, models_by_key)
+    annotations = annotate_vcf(
+        vcf, models_by_key, suppress_downstream_frameshift=suppress_downstream_frameshift
+    )
     return format_report(annotations, ordered)
 
 
@@ -796,6 +808,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         default=None,
         help="override the genetic code (default: read /transl_table from each CDS)",
     )
+    parser.add_argument(
+        "--annotate_downstream_of_frameshift",
+        action="store_true",
+        help="annotate variants 3' of a frameshift (by default they are "
+        "suppressed because a frameshift invalidates every downstream codon)",
+    )
     parser.add_argument("--output", default="VARIANT_ANNOTATIONS.txt")
     return parser
 
@@ -819,6 +837,7 @@ def run_cli(args: argparse.Namespace) -> int:
         feature_qualifier=args.feature_qualifier,
         exact_match=args.exact_match,
         transl_table=args.transl_table,
+        suppress_downstream_frameshift=not args.annotate_downstream_of_frameshift,
     )
     with open(args.output, "w") as out:
         out.write(report + "\n")
