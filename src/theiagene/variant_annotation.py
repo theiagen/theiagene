@@ -390,145 +390,190 @@ def _depth_str(depth) -> str:
     return "NA" if depth is None else str(depth)
 
 
-def annotate_snp(model: GeneModel, pos0: int, ref: str, alt: str) -> dict:
-    """Annotate a single-nucleotide substitution against a gene's coding sequence"""
-    cds_idx = model.pos2cds.get(pos0)
-    if cds_idx is None:
-        return None  # not within a coding base (e.g. intronic anchor)
+class Variant:
+    """A single normalized nucleotide change evaluated against one gene.
 
-    coding_ref = ref if model.strand == 1 else complement(ref)
-    coding_alt = alt if model.strand == 1 else complement(alt)
+    A ``Variant`` pairs a trimmed REF/ALT change -- ``ref_seg``/``alt_seg`` at
+    0-based genomic ``changed_pos0``, as produced by :func:`normalize_indel` --
+    with the :class:`GeneModel` it is annotated against (``model``).  Its methods
+    are the transformations that classify the change and build its HGVS c./p.
+    notation.
 
-    expected = model.ref_coding[cds_idx]
-    if expected != coding_ref:
-        logger.warning(
-            f"{model.gene_id}: reference base '{expected}' at c.{cds_idx + 1} "
-            f"disagrees with VCF REF '{coding_ref}' (coding strand)"
+    ``annotate`` returns an annotation dict with keys ``so_term``, ``hgvs_c``,
+    ``hgvs_p``, ``cds_pos`` and ``is_frameshift``, or ``None`` when the change
+    does not fall on the model's coding sequence."""
+
+    def __init__(
+        self, model: GeneModel, changed_pos0: int, ref_seg: str, alt_seg: str
+    ):
+        self.model = model
+        self.changed_pos0 = changed_pos0
+        self.ref_seg = ref_seg
+        self.alt_seg = alt_seg
+
+    def annotate(self) -> dict:
+        """Classify the change against the model.
+
+        Dispatches to :meth:`annotate_snp` for a single-base substitution and to
+        :meth:`annotate_indel` otherwise; returns ``None`` for a no-op change
+        (empty REF and ALT segments) or one that does not touch coding bases."""
+        if len(self.ref_seg) == 1 and len(self.alt_seg) == 1:
+            return self.annotate_snp()
+        if not self.ref_seg and not self.alt_seg:
+            return None
+        return self.annotate_indel()
+
+    def annotate_snp(self) -> dict:
+        """Annotate a single-nucleotide substitution against the coding sequence"""
+        model = self.model
+        pos0, ref, alt = self.changed_pos0, self.ref_seg, self.alt_seg
+        cds_idx = model.pos2cds.get(pos0)
+        if cds_idx is None:
+            return None  # not within a coding base (e.g. intronic anchor)
+
+        coding_ref = ref if model.strand == 1 else complement(ref)
+        coding_alt = alt if model.strand == 1 else complement(alt)
+
+        expected = model.ref_coding[cds_idx]
+        if expected != coding_ref:
+            logger.warning(
+                f"{model.gene_id}: reference base '{expected}' at c.{cds_idx + 1} "
+                f"disagrees with VCF REF '{coding_ref}' (coding strand)"
+            )
+
+        codon_number = cds_idx // 3 + 1
+        pos_in_codon = cds_idx % 3
+        ref_codon = model.codon(codon_number)
+        hgvs_c = f"c.{cds_idx + 1}{coding_ref}>{coding_alt}"
+
+        if not ref_codon:
+            # incomplete terminal codon; report nucleotide change only
+            return {
+                "so_term": "coding_sequence_variant",
+                "hgvs_c": hgvs_c,
+                "hgvs_p": "p.?",
+                "cds_pos": cds_idx,
+                "is_frameshift": False,
+            }
+
+        mut_codon = (
+            ref_codon[:pos_in_codon] + coding_alt + ref_codon[pos_in_codon + 1 :]
         )
+        ref_aa = translate(ref_codon, model.transl_table)
+        alt_aa = translate(mut_codon, model.transl_table)
 
-    codon_number = cds_idx // 3 + 1
-    pos_in_codon = cds_idx % 3
-    ref_codon = model.codon(codon_number)
-    hgvs_c = f"c.{cds_idx + 1}{coding_ref}>{coding_alt}"
+        if ref_aa == alt_aa:
+            so_term = "synonymous_variant"
+            hgvs_p = f"p.{aa3(ref_aa)}{codon_number}="
+        elif alt_aa == "*":
+            so_term = "stop_gained"
+            hgvs_p = f"p.{aa3(ref_aa)}{codon_number}Ter"
+        elif ref_aa == "*":
+            so_term = "stop_lost"
+            hgvs_p = f"p.Ter{codon_number}{aa3(alt_aa)}"
+        elif codon_number == 1 and ref_aa == "M":
+            so_term = "start_lost"
+            hgvs_p = f"p.{aa3(ref_aa)}1{aa3(alt_aa)}"
+        else:
+            so_term = "missense_variant"
+            hgvs_p = f"p.{aa3(ref_aa)}{codon_number}{aa3(alt_aa)}"
 
-    if not ref_codon:
-        # incomplete terminal codon; report nucleotide change only
         return {
-            "so_term": "coding_sequence_variant",
+            "so_term": so_term,
             "hgvs_c": hgvs_c,
-            "hgvs_p": "p.?",
+            "hgvs_p": hgvs_p,
             "cds_pos": cds_idx,
             "is_frameshift": False,
         }
 
-    mut_codon = ref_codon[:pos_in_codon] + coding_alt + ref_codon[pos_in_codon + 1 :]
-    ref_aa = translate(ref_codon, model.transl_table)
-    alt_aa = translate(mut_codon, model.transl_table)
+    def annotate_indel(self) -> dict:
+        """Annotate an insertion, deletion or delins against the coding sequence"""
+        model = self.model
+        changed_pos0, ref_seg, alt_seg = (
+            self.changed_pos0,
+            self.ref_seg,
+            self.alt_seg,
+        )
+        # coding indices of the deleted reference bases (those that are coding)
+        deleted_idx = sorted(
+            model.pos2cds[changed_pos0 + i]
+            for i in range(len(ref_seg))
+            if (changed_pos0 + i) in model.pos2cds
+        )
+        coding_alt = alt_seg if model.strand == 1 else complement(alt_seg)
+        if model.strand == -1:
+            coding_alt = coding_alt[::-1]  # reverse to restore 5'->3' coding order
 
-    if ref_aa == alt_aa:
-        so_term = "synonymous_variant"
-        hgvs_p = f"p.{aa3(ref_aa)}{codon_number}="
-    elif alt_aa == "*":
-        so_term = "stop_gained"
-        hgvs_p = f"p.{aa3(ref_aa)}{codon_number}Ter"
-    elif ref_aa == "*":
-        so_term = "stop_lost"
-        hgvs_p = f"p.Ter{codon_number}{aa3(alt_aa)}"
-    elif codon_number == 1 and ref_aa == "M":
-        so_term = "start_lost"
-        hgvs_p = f"p.{aa3(ref_aa)}1{aa3(alt_aa)}"
-    else:
-        so_term = "missense_variant"
-        hgvs_p = f"p.{aa3(ref_aa)}{codon_number}{aa3(alt_aa)}"
+        deleted_cds = len(deleted_idx)
+        inserted_cds = len(coding_alt)
+        frame_delta = (inserted_cds - deleted_cds) % 3
 
-    return {
-        "so_term": so_term,
-        "hgvs_c": hgvs_c,
-        "hgvs_p": hgvs_p,
-        "cds_pos": cds_idx,
-        "is_frameshift": False,
-    }
-
-
-def annotate_indel(
-    model: GeneModel, changed_pos0: int, ref_seg: str, alt_seg: str
-) -> dict:
-    """Annotate an insertion, deletion or delins against a gene's coding sequence"""
-    # coding indices of the deleted reference bases (those that are coding)
-    deleted_idx = sorted(
-        model.pos2cds[changed_pos0 + i]
-        for i in range(len(ref_seg))
-        if (changed_pos0 + i) in model.pos2cds
-    )
-    coding_alt = alt_seg if model.strand == 1 else complement(alt_seg)
-    if model.strand == -1:
-        coding_alt = coding_alt[::-1]  # reverse to restore 5'->3' coding order
-
-    deleted_cds = len(deleted_idx)
-    inserted_cds = len(coding_alt)
-    frame_delta = (inserted_cds - deleted_cds) % 3
-
-    # locate the variant within the coding sequence for splicing / reporting
-    if deleted_idx:
-        cds_start = deleted_idx[0]
-        cds_end = deleted_idx[-1] + 1
-    else:
-        # pure insertion: require a coding base immediately on one side, then
-        # splice at the count of coding bases lying 5' of the insertion point.
-        # This is strand-aware and correct at exon/CDS boundaries where a naive
-        # flank index would be off by one (5' base of an internal exon / CDS start)
-        if (changed_pos0 - 1) not in model.pos2cds and changed_pos0 not in model.pos2cds:
-            return None  # insertion is not adjacent to any coding base
-        if model.strand == 1:
-            cds_start = sum(1 for g in model.genomic_positions if g < changed_pos0)
+        # locate the variant within the coding sequence for splicing / reporting
+        if deleted_idx:
+            cds_start = deleted_idx[0]
+            cds_end = deleted_idx[-1] + 1
         else:
-            cds_start = sum(1 for g in model.genomic_positions if g >= changed_pos0)
-        cds_end = cds_start
+            # pure insertion: require a coding base immediately on one side, then
+            # splice at the count of coding bases lying 5' of the insertion point.
+            # This is strand-aware and correct at exon/CDS boundaries where a naive
+            # flank index would be off by one (5' base of an internal exon / CDS start)
+            if (
+                changed_pos0 - 1
+            ) not in model.pos2cds and changed_pos0 not in model.pos2cds:
+                return None  # insertion is not adjacent to any coding base
+            if model.strand == 1:
+                cds_start = sum(1 for g in model.genomic_positions if g < changed_pos0)
+            else:
+                cds_start = sum(1 for g in model.genomic_positions if g >= changed_pos0)
+            cds_end = cds_start
 
-    first_codon = cds_start // 3 + 1
+        first_codon = cds_start // 3 + 1
 
-    if frame_delta != 0:
+        if frame_delta != 0:
+            return {
+                "so_term": "frameshift_variant",
+                "hgvs_c": self._hgvs_c_indel(cds_start, cds_end, coding_alt),
+                "hgvs_p": f"p.{aa3(model.aa_at(first_codon))}{first_codon}fs",
+                "cds_pos": cds_start,
+                "is_frameshift": True,
+            }
+
+        # in-frame: build the mutant coding sequence and compare proteins
+        mut_coding = (
+            model.ref_coding[:cds_start] + coding_alt + model.ref_coding[cds_end:]
+        )
+        mut_protein = translate(mut_coding, model.transl_table)
+        ref_protein = model.ref_protein
+
+        hgvs_c = self._hgvs_c_indel(cds_start, cds_end, coding_alt)
+        so_term, hgvs_p = _protein_consequence(
+            ref_protein, mut_protein, first_codon, deleted_cds, inserted_cds
+        )
         return {
-            "so_term": "frameshift_variant",
-            "hgvs_c": _hgvs_c_indel(cds_start, cds_end, coding_alt, ref_seg, model),
-            "hgvs_p": f"p.{aa3(model.aa_at(first_codon))}{first_codon}fs",
+            "so_term": so_term,
+            "hgvs_c": hgvs_c,
+            "hgvs_p": hgvs_p,
             "cds_pos": cds_start,
-            "is_frameshift": True,
+            "is_frameshift": False,
         }
 
-    # in-frame: build the mutant coding sequence and compare proteins
-    mut_coding = model.ref_coding[:cds_start] + coding_alt + model.ref_coding[cds_end:]
-    mut_protein = translate(mut_coding, model.transl_table)
-    ref_protein = model.ref_protein
-
-    hgvs_c = _hgvs_c_indel(cds_start, cds_end, coding_alt, ref_seg, model)
-    so_term, hgvs_p = _protein_consequence(
-        ref_protein, mut_protein, first_codon, deleted_cds, inserted_cds
-    )
-    return {
-        "so_term": so_term,
-        "hgvs_c": hgvs_c,
-        "hgvs_p": hgvs_p,
-        "cds_pos": cds_start,
-        "is_frameshift": False,
-    }
-
-
-def _hgvs_c_indel(cds_start, cds_end, coding_alt, ref_seg, model) -> str:
-    """Build the HGVS c. string for an indel/delins in coding coordinates"""
-    deleted_len = cds_end - cds_start
-    if not ref_seg or deleted_len == 0:
-        # pure insertion between cds_start-1 and cds_start (1-based cds_start, +1)
-        return f"c.{cds_start}_{cds_start + 1}ins{coding_alt}"
-    deleted_bases = model.ref_coding[cds_start:cds_end]
-    if not coding_alt:
+    def _hgvs_c_indel(self, cds_start, cds_end, coding_alt) -> str:
+        """Build the HGVS c. string for an indel/delins in coding coordinates"""
+        model = self.model
+        ref_seg = self.ref_seg
+        deleted_len = cds_end - cds_start
+        if not ref_seg or deleted_len == 0:
+            # pure insertion between cds_start-1 and cds_start (1-based cds_start, +1)
+            return f"c.{cds_start}_{cds_start + 1}ins{coding_alt}"
+        deleted_bases = model.ref_coding[cds_start:cds_end]
+        if not coding_alt:
+            if deleted_len == 1:
+                return f"c.{cds_start + 1}del{deleted_bases}"
+            return f"c.{cds_start + 1}_{cds_end}del"
+        # delins
         if deleted_len == 1:
-            return f"c.{cds_start + 1}del{deleted_bases}"
-        return f"c.{cds_start + 1}_{cds_end}del"
-    # delins
-    if deleted_len == 1:
-        return f"c.{cds_start + 1}delins{coding_alt}"
-    return f"c.{cds_start + 1}_{cds_end}delins{coding_alt}"
+            return f"c.{cds_start + 1}delins{coding_alt}"
+        return f"c.{cds_start + 1}_{cds_end}delins{coding_alt}"
 
 
 def _protein_consequence(
@@ -655,12 +700,7 @@ def annotate_vcf(
             )
             for model in models:
                 try:
-                    if len(ref_seg) == 1 and len(alt_seg) == 1:
-                        ann = annotate_snp(model, changed_pos0, ref_seg, alt_seg)
-                    elif not ref_seg and not alt_seg:
-                        ann = None
-                    else:
-                        ann = annotate_indel(model, changed_pos0, ref_seg, alt_seg)
+                    ann = Variant(model, changed_pos0, ref_seg, alt_seg).annotate()
                 except Exception as exc:  # never let one record abort the report
                     logger.warning(
                         f"Skipping {record.contig}:{record.pos} "

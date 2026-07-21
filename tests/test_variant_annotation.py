@@ -479,7 +479,8 @@ def test_insertion_at_cds_start_preserves_start_codon(gbff):
         gbff, {record.id for record in SeqIO.parse(gbff, "genbank")}, ["test gene alpha"], "CDS", "product", exact_match=True
     )
     model = models["test gene alpha"]
-    ann = va.annotate_indel(model, 9, "", "TTT")  # alpha CDS starts at genomic 9
+    # alpha CDS starts at genomic 9
+    ann = va.Variant(model, 9, "", "TTT").annotate()
     assert ann["cds_pos"] == 0
     assert ann["so_term"] == "inframe_insertion"
     assert ann["hgvs_p"].endswith("insPhe")  # TTT -> Phe, not the corrupted-frame Ile
