@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Tool outputs (produced in the working directory by the subcommands)
+COVERAGE_STATS.tsv
+DEPTH_DICT.json
+COVERAGE_DICT.json
+GENE_VARIANTS.vcf
+VARIANT_ANNOTATIONS.txt

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "theiagene"
+version = "1.0.0"
+description = "Gene coverage and variant annotation toolkit for Theiagen bioinformatics workflows"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Zachary Konkel", email = "zachary.konkel@theiagen.com" },
+]
+keywords = ["bioinformatics", "genomics", "variant-annotation", "coverage", "pysam"]
+dependencies = [
+    "pysam",
+    "biopython",
+]
+
+[project.urls]
+Homepage = "https://github.com/theiagen/theiagene"
+Repository = "https://github.com/theiagen/theiagene"
+
+[project.scripts]
+theiagene = "theiagene.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
