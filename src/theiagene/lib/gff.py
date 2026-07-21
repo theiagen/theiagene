@@ -13,17 +13,18 @@ from urllib.parse import unquote
 GFF_STRAND = {"+": 1, "-": -1}
 
 
-def parse_gff_attributes(attributes: str) -> dict:
+def parse_gff_attributes(attributes: str, field_delimiter: str ";", value_delimiter: str "=") -> dict:
     """Parse a GFF3 column-9 attribute string into a {key: value} dict.
 
     Values are percent-decoded per the GFF3 spec.  Fields without an '=' are
     ignored and duplicate keys keep the last occurrence."""
     parsed = {}
-    for field in attributes.strip().strip(";").split(";"):
+    for field in attributes.strip().strip(";").split(field_delimiter):
         field = field.strip()
-        if not field or "=" not in field:
-            continue
-        key, value = field.split("=", 1)
+        try:
+            key, value = field.split(value_delimiter)
+        except ValueError:
+            raise ValueError(f"unexpected attributes field: {field}")
         parsed[key.strip()] = unquote(value.strip())
     return parsed
 
@@ -45,15 +46,17 @@ def iter_gff_features(reference_gff: str, feature_type: str):
                 continue
             fields = line.split("\t")
             if len(fields) != 9:
-                continue
+                raise ValueError(f"incorrectly formatted GFF: {len(fields)} fields recovered; 9 expected")
             seqid, source, obs_type, start, end, score, strand, phase, attributes = fields
             if obs_type.lower() != feature_type.lower():
                 continue
             yield {
                 "seqid": seqid,
+                "source": source,
                 # GFF columns are 1-based, both-inclusive; convert to 0-based, half-open
                 "start": int(start) - 1,
                 "end": int(end),
+                "score": score,
                 "strand": GFF_STRAND.get(strand),
                 "phase": phase,
                 "attributes": parse_gff_attributes(attributes),
