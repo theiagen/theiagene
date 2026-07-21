@@ -16,13 +16,17 @@ GFF_STRAND = {"+": 1, "-": -1}
 def parse_gff_attributes(attributes: str, field_delimiter: str = ";", value_delimiter: str = "=") -> dict:
     """Parse a GFF3 column-9 attribute string into a {key: value} dict.
 
-    Values are percent-decoded per the GFF3 spec.  Fields without an '=' are
-    ignored and duplicate keys keep the last occurrence."""
+    Values are percent-decoded per the GFF3 spec.  An empty attribute column
+    yields an empty dict; a malformed field (one lacking the value delimiter)
+    raises ``ValueError``.  Duplicate keys keep the last occurrence."""
+    stripped = attributes.strip().strip(";")
+    if not stripped:
+        return {}
     parsed = {}
-    for field in attributes.strip().strip(";").split(field_delimiter):
+    for field in stripped.split(field_delimiter):
         field = field.strip()
         try:
-            key, value = field.split(value_delimiter)
+            key, value = field.split(value_delimiter, 1)
         except ValueError:
             raise ValueError(f"unexpected attributes field: {field}")
         parsed[key.strip()] = unquote(value.strip())

@@ -14,10 +14,8 @@ github.com/theiagen/public_health_bioinformatics)."""
 import sys
 import logging
 import argparse
-from collections import defaultdict
 
 import pysam
-from Bio import SeqIO
 
 # shared helpers, re-exported so callers (and tests) can reach them here
 from theiagene.lib.query import (  # noqa: F401
@@ -27,7 +25,14 @@ from theiagene.lib.query import (  # noqa: F401
 )
 from theiagene.lib.io_utils import write_json  # noqa: F401
 from theiagene.lib.vcf import extract_vcf_genes  # noqa: F401
-from theiagene.lib.gff import iter_gff_features
+from theiagene.lib.gene_model import Gene
+from theiagene.lib.parsers import (
+    iter_gbff_raw,
+    iter_gff_raw,
+    match_identifiers,
+    resolve_contig,
+    parse_bed_genes,
+)
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -44,101 +49,88 @@ def input_error_handling(args: argparse.Namespace) -> None:
         raise ValueError("'query_genes' or 'bedfile' required")
 
 
+def _coverage_genes(
+    raw_features,
+    query_set: set,
+    feature_qualifier: str,
+    exact_match: bool,
+    contig_names: set,
+    require_contig: bool,
+) -> list:
+    """Turn a RawGene stream into a list of matched Gene objects.
+
+    Matching is the coverage flavour (raw exact/substring on the single feature
+    qualifier); genes sharing a name on a contig accumulate their parts."""
+    qualifier = feature_qualifier.strip()
+    genes = {}
+    order = []
+    for raw in raw_features:
+        matched, _ = match_identifiers(
+            raw.qualifiers, list(query_set), [qualifier],
+            exact_match=exact_match, normalize=False,
+        )
+        if matched is None:
+            continue
+        contig = resolve_contig(raw.contig_candidates, contig_names, require_contig, "BAM")
+        key = (contig, matched)
+        gene = genes.get(key)
+        if gene is None:
+            gene = Gene(gene_id=matched, contig=contig, strand=raw.strand)
+            genes[key] = gene
+            order.append(key)
+        else:
+            logger.warning(f"{matched} recovered multiple times in {contig}")
+        for start, end in raw.parts:
+            gene.add_part(start, end)
+    return [genes[key] for key in order]
+
+
 def parse_gff(
-    bam_references: set,
+    contig_names: set,
     reference_gff: str,
     query_set: set,
     feature_type: str,
     feature_qualifier: str,
-    id_check: object,
-    contig2query2coords: dict,
-    ambiguous_contig: bool
-) -> dict:
-    """Parse a GFF to obtain query coordinates.
+    exact_match: bool = False,
+    require_contig: bool = True,
+) -> list:
+    """Parse a GFF into a list of Gene objects (coordinates only).
 
-    Each matching feature line contributes one coordinate part; multi-segment
-    (multi-exon) genes therefore accumulate several parts under the same query,
+    Multi-exon CDS lines are coalesced into a single Gene carrying every segment,
     exactly as ``parse_bed`` accumulates multiple BED rows."""
-    qualifier = feature_qualifier.strip()
-    for feature in iter_gff_features(reference_gff, feature_type):
-        # is there the qualifier that we want?
-        qualifier_id = feature["attributes"].get(qualifier)
-        if qualifier_id is None:
-            continue
-        # is this an entry we want?
-        if id_check(query_set, qualifier_id):
-            record_id = feature["seqid"]
-            if record_id not in bam_references and not ambiguous_contig:
-                raise KeyError(f"{record_id} not in BAM")
-            # iter_gff_features already converts to 0-based, half-open coordinates
-            contig2query2coords[record_id][qualifier_id].append(
-                (feature["start"], feature["end"])
-            )
-    return contig2query2coords
+    return _coverage_genes(
+        iter_gff_raw(reference_gff, feature_type),
+        query_set, feature_qualifier, exact_match, contig_names, require_contig,
+    )
 
 
 def parse_gbff(
-    bam_references: set,
+    contig_names: set,
     reference_gbff: str,
     query_set: set,
     feature_type: str,
     feature_qualifier: str,
-    id_check: object,
-    contig2query2coords: dict,
-    ambiguous_contig: bool
-) -> dict:
-    """Parse a GBFF to obtain query coordinates"""
-
-    with open(reference_gbff) as handle:
-        for record in SeqIO.parse(handle, "genbank"):
-            record_id = record.id
-            # inefficient query check to determine BAM reference check
-            if record_id not in bam_references:
-                record_id = record.name
-                if record_id not in bam_references and not ambiguous_contig:
-                    raise KeyError(f"{record.id} and {record.name} not in BAM")
-            for feature in record.features:
-                # is this the feature we want to scan?
-                if feature.type.lower() == feature_type.lower():
-                    # is there the qualifier that we want?
-                    qualifier_ids = feature.qualifiers.get(feature_qualifier.strip())
-                    if qualifier_ids:
-                        qualifier_id = qualifier_ids[0]
-                        # is this a qualifying feature?
-                        if id_check(query_set, qualifier_id):
-                            if qualifier_id in contig2query2coords[record_id]:
-                                logger.warning(
-                                    f"{qualifier_id} recovered multiple times in {record_id}"
-                                )
-                            # GenBanks are 1-based coordinates, though BioPython adjusts natively
-                            loc_coords = [
-                                [int(x.start), int(x.end)]
-                                for x in feature.location.parts
-                            ]
-                            contig2query2coords[record_id][qualifier_id].extend(
-                                loc_coords
-                            )
-    return contig2query2coords
+    exact_match: bool = False,
+    require_contig: bool = True,
+) -> list:
+    """Parse a GBFF into a list of Gene objects (coordinates only)"""
+    return _coverage_genes(
+        iter_gbff_raw(reference_gbff, feature_type),
+        query_set, feature_qualifier, exact_match, contig_names, require_contig,
+    )
 
 
 def parse_bed(
-    bam_references: set, bedfile: str, query_set: set, id_check: object, contig2query2coords: dict, ambiguous_contig: bool
-) -> dict:
-    """Parse a BED file to obtain query coordinates"""
-    with open(bedfile, "r") as handle:
-        for line in handle:
-            if not line.startswith("#"):
-                data = line.split()
-                id = data[3]
-                # is this an entry we want?
-                if id_check(query_set, id):
-                    if data[0] not in bam_references and not ambiguous_contig:
-                        raise KeyError(f"{data[0]} not in BAM")
-                    # BED files are 0-based coordinates
-                    contig2query2coords[data[0]][id].append(
-                        (int(data[1]), int(data[2]))
-                    )
-    return contig2query2coords
+    contig_names: set,
+    bedfile: str,
+    query_set: set,
+    exact_match: bool = False,
+    require_contig: bool = True,
+) -> list:
+    """Parse a BED file into a list of Gene objects (coordinates only)"""
+    return parse_bed_genes(
+        bedfile, query_set, exact_match, contig_names, require_contig
+    )
 
 
 def import_bam(
@@ -164,62 +156,63 @@ def import_bam(
 
 def quantify_gene_coverage(
     imported_bam: pysam.AlignmentFile,
-    contig2query2coords: dict,
+    genes: list,
     min_depth: int = 1,
     min_quality: int = 0,
 ) -> tuple:
-    """Quantify gene breadth and depth off coverage"""
+    """Quantify gene breadth and depth of coverage over a list of Gene objects"""
     depth_dict = {}
     coverage_dict = {}
     reference_names = set(imported_bam.references)
 
-    for contig, query2coords in contig2query2coords.items():
+    for gene in genes:
+        contig = gene.contig
+        query = gene.gene_id
         if contig not in reference_names:
             raise ValueError(f"Contig '{contig}' not found in BAM references")
         contig_len = imported_bam.get_reference_length(contig)
-        for query, loc_parts in query2coords.items():
-            if query in depth_dict:
-                logger.warning(
-                    f"{query} is present on multiple contigs and will be overwritten"
-                )
-            # check coverage data across range
-            depths = []
-            coverages = []
-            for coords in loc_parts:
-                start, end = int(coords[0]), int(coords[1])
-                if end <= start:
-                    raise ValueError(
-                        f"Invalid region for query '{query}' on contig '{contig}': start ({start}) must be < end ({end})"
-                    )
-                if start < 0:
-                    raise ValueError(
-                        f"Invalid region for query '{query}' on contig '{contig}': start ({start}) must be >= 0"
-                    )
-                if end > contig_len:
-                    raise ValueError(
-                        f"Invalid region for query '{query}' on contig '{contig}': end ({end}) exceeds contig length ({contig_len})"
-                    )
-                coverage_data = imported_bam.count_coverage(
-                    contig, start, end, quality_threshold=min_quality
-                )
-                for i, _ in enumerate(range(start, end)):
-                    # calculate total depth across bases
-                    total_depth = (
-                        coverage_data[0][i]
-                        + coverage_data[1][i]
-                        + coverage_data[2][i]
-                        + coverage_data[3][i]
-                    )
-                    # base is considered covered if beyond minimum depth
-                    coverages.append(total_depth >= min_depth)
-                    depths.append(total_depth)
-            if not depths:
+        if query in depth_dict:
+            logger.warning(
+                f"{query} is present on multiple contigs and will be overwritten"
+            )
+        # check coverage data across range
+        depths = []
+        coverages = []
+        for start, end in gene.parts:
+            start, end = int(start), int(end)
+            if end <= start:
                 raise ValueError(
-                    f"No positions evaluated for query '{query}' on contig '{contig}'"
+                    f"Invalid region for query '{query}' on contig '{contig}': start ({start}) must be < end ({end})"
                 )
-            depth_dict[query] = sum(depths) / len(depths)
-            # breadth is percent of covered bases exceeding min_depth
-            coverage_dict[query] = 100 * (sum(coverages) / len(coverages))
+            if start < 0:
+                raise ValueError(
+                    f"Invalid region for query '{query}' on contig '{contig}': start ({start}) must be >= 0"
+                )
+            if end > contig_len:
+                raise ValueError(
+                    f"Invalid region for query '{query}' on contig '{contig}': end ({end}) exceeds contig length ({contig_len})"
+                )
+            coverage_data = imported_bam.count_coverage(
+                contig, start, end, quality_threshold=min_quality
+            )
+            for i, _ in enumerate(range(start, end)):
+                # calculate total depth across bases
+                total_depth = (
+                    coverage_data[0][i]
+                    + coverage_data[1][i]
+                    + coverage_data[2][i]
+                    + coverage_data[3][i]
+                )
+                # base is considered covered if beyond minimum depth
+                coverages.append(total_depth >= min_depth)
+                depths.append(total_depth)
+        if not depths:
+            raise ValueError(
+                f"No positions evaluated for query '{query}' on contig '{contig}'"
+            )
+        depth_dict[query] = sum(depths) / len(depths)
+        # breadth is percent of covered bases exceeding min_depth
+        coverage_dict[query] = 100 * (sum(coverages) / len(coverages))
 
     return dict(sorted(depth_dict.items())), dict(sorted(coverage_dict.items()))
 
@@ -258,12 +251,6 @@ def run_cli(args: argparse.Namespace) -> int:
     # error parsing
     input_error_handling(args)
 
-    # set comparison check function
-    if args.exact_match:
-        id_check = exact_check
-    else:
-        id_check = substring_check
-
     # import queries
     if args.query_genes:
         query_set = set()
@@ -277,49 +264,50 @@ def run_cli(args: argparse.Namespace) -> int:
         args.bam, args.ambiguous_contig
     )
 
-    # {<CONTIG>: <QUERY>: [(LOC_START_1, LOC_END_1,), (LOC_START_n, LOC_END_n),]}
-    contig2query2coords = defaultdict(lambda: defaultdict(list))
+    # collect query-gene coordinates as a list of Gene objects
+    contig_names = set(imported_bam.references)
+    require_contig = not args.ambiguous_contig
+    genes = []
     if args.reference_gbff:
-        contig2query2coords = parse_gbff(
-            set(imported_bam.references),
+        genes = parse_gbff(
+            contig_names,
             args.reference_gbff,
             query_set,
             args.feature_type,
             args.feature_qualifier,
-            id_check,
-            contig2query2coords,
-            args.ambiguous_contig
+            args.exact_match,
+            require_contig,
         )
     elif args.reference_gff:
-        contig2query2coords = parse_gff(
-            set(imported_bam.references),
+        genes = parse_gff(
+            contig_names,
             args.reference_gff,
             query_set,
             args.feature_type,
             args.feature_qualifier,
-            id_check,
-            contig2query2coords,
-            args.ambiguous_contig
+            args.exact_match,
+            require_contig,
         )
     if args.bedfile:
-        contig2query2coords = parse_bed(
-            set(imported_bam.references), args.bedfile, query_set, id_check, contig2query2coords, args.ambiguous_contig
+        genes += parse_bed(
+            contig_names, args.bedfile, query_set, args.exact_match, require_contig
         )
 
     if args.ambiguous_contig:
+        # reassign every gene to the single BAM contig
         contig = imported_bam.references[0]
-        # rename contig2query2coords to reflect first contig
-        contig2query2coords = {contig: v for k, v in contig2query2coords.items()}
+        for gene in genes:
+            gene.contig = contig
 
     # optionally extract gene-overlapping variants from a VCF into a single VCF;
     # the extraction routine lives in theiagene.lib.vcf (shared with the
     # variant_annotation command) and is re-exported into this module
     if args.vcf:
-        extract_vcf_genes(args.vcf, contig2query2coords, "GENE_VARIANTS.vcf")
+        extract_vcf_genes(args.vcf, genes, "GENE_VARIANTS.vcf")
 
     # quantify statistics and write
     depth_dict, coverage_dict = quantify_gene_coverage(
-        imported_bam, contig2query2coords, args.min_depth, args.min_quality
+        imported_bam, genes, args.min_depth, args.min_quality
     )
     write_json("DEPTH_DICT.json", depth_dict)
     write_json("COVERAGE_DICT.json", coverage_dict)

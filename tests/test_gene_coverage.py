@@ -1,4 +1,3 @@
-from collections import defaultdict
 import re
 
 import pytest
@@ -8,6 +7,7 @@ from Bio.SeqFeature import FeatureLocation, SeqFeature
 from Bio.SeqRecord import SeqRecord
 
 from theiagene import gene_coverage
+from theiagene.lib.gene_model import Gene
 
 
 class MockBam:
@@ -50,19 +50,18 @@ def test_parse_gbff_extracts_expected_coordinates(tmp_path):
     gbff = tmp_path / "mock.gbff"
     _write_mock_gbff(gbff, contig="contig1", gene="geneA", start=10, end=20)
 
-    contig2query2coords = defaultdict(lambda: defaultdict(list))
-    parsed = gene_coverage.parse_gbff(
+    genes = gene_coverage.parse_gbff(
         set(mock_bam.references),
         str(gbff),
         {"geneA"},
         "CDS",
         "product",
-        gene_coverage.exact_check,
-        contig2query2coords,
-        False
+        exact_match=True,
     )
 
-    assert parsed["contig1"]["geneA"] == [[10, 20]]
+    assert len(genes) == 1
+    assert (genes[0].contig, genes[0].gene_id) == ("contig1", "geneA")
+    assert genes[0].parts == [(10, 20)]
 
 
 def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
@@ -82,22 +81,16 @@ def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
         {"geneA"},
         "CDS",
         "product",
-        gene_coverage.exact_check,
-        defaultdict(lambda: defaultdict(list)),
-        False
+        exact_match=True,
     )
     from_bed = gene_coverage.parse_bed(
         set(mock_bam.references),
         str(bed),
         {"geneA"},
-        gene_coverage.exact_check,
-        defaultdict(lambda: defaultdict(list)),
-        False
+        exact_match=True,
     )
 
-    gbff_coords = [tuple(x) for x in from_gbff["contig1"]["geneA"]]
-    bed_coords = [tuple(x) for x in from_bed["contig1"]["geneA"]]
-    assert gbff_coords == bed_coords == [(10, 20)]
+    assert from_gbff[0].parts == from_bed[0].parts == [(10, 20)]
 
 
 class _Args:
@@ -134,17 +127,15 @@ def test_parse_gff_extracts_expected_coordinates(tmp_path):
         "##gff-version 3\n"
         "contig1\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
     )
-    parsed = gene_coverage.parse_gff(
+    genes = gene_coverage.parse_gff(
         {"contig1"},
         str(gff),
         {"geneA"},
         "CDS",
         "product",
-        gene_coverage.exact_check,
-        defaultdict(lambda: defaultdict(list)),
-        False,
+        exact_match=True,
     )
-    assert parsed["contig1"]["geneA"] == [(10, 20)]
+    assert genes[0].parts == [(10, 20)]
 
 
 def test_gff_and_bed_coordinates_agree_for_same_gene(tmp_path):
@@ -158,16 +149,12 @@ def test_gff_and_bed_coordinates_agree_for_same_gene(tmp_path):
     bed.write_text("contig1\t10\t20\tgeneA\n")
 
     from_gff = gene_coverage.parse_gff(
-        {"contig1"}, str(gff), {"geneA"}, "CDS", "product",
-        gene_coverage.exact_check, defaultdict(lambda: defaultdict(list)), False,
+        {"contig1"}, str(gff), {"geneA"}, "CDS", "product", exact_match=True,
     )
     from_bed = gene_coverage.parse_bed(
-        {"contig1"}, str(bed), {"geneA"}, gene_coverage.exact_check,
-        defaultdict(lambda: defaultdict(list)), False,
+        {"contig1"}, str(bed), {"geneA"}, exact_match=True,
     )
-    gff_coords = [tuple(x) for x in from_gff["contig1"]["geneA"]]
-    bed_coords = [tuple(x) for x in from_bed["contig1"]["geneA"]]
-    assert gff_coords == bed_coords == [(10, 20)]
+    assert from_gff[0].parts == from_bed[0].parts == [(10, 20)]
 
 
 def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
@@ -178,11 +165,10 @@ def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
         "contig1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;product=geneA\n"
         "contig1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;product=geneA\n"
     )
-    parsed = gene_coverage.parse_gff(
-        {"contig1"}, str(gff), {"geneA"}, "CDS", "product",
-        gene_coverage.exact_check, defaultdict(lambda: defaultdict(list)), False,
+    genes = gene_coverage.parse_gff(
+        {"contig1"}, str(gff), {"geneA"}, "CDS", "product", exact_match=True,
     )
-    assert parsed["contig1"]["geneA"] == [(0, 6), (10, 16)]
+    assert genes[0].parts == [(0, 6), (10, 16)]
 
 
 def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
@@ -193,8 +179,7 @@ def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
     )
     with pytest.raises(KeyError, match="otherContig not in BAM"):
         gene_coverage.parse_gff(
-            {"contig1"}, str(gff), {"geneA"}, "CDS", "product",
-            gene_coverage.exact_check, defaultdict(lambda: defaultdict(list)), False,
+            {"contig1"}, str(gff), {"geneA"}, "CDS", "product", exact_match=True,
         )
 
 
@@ -202,11 +187,11 @@ def test_quantify_gene_coverage_known_depth_and_breadth():
     mock_bam = MockBam(
         references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
     )
-    contig2query2coords = {"contig1": {"geneA": [(10, 20)]}}
+    genes = [Gene(gene_id="geneA", contig="contig1", parts=[(10, 20)])]
 
     depth_dict, coverage_dict = gene_coverage.quantify_gene_coverage(
         mock_bam,
-        contig2query2coords,
+        genes,
         min_depth=1,
         min_quality=0,
     )
@@ -216,27 +201,22 @@ def test_quantify_gene_coverage_known_depth_and_breadth():
 
 
 @pytest.mark.parametrize(
-    "coords, message_fragment",
+    "contig, parts, message_fragment",
     [
-        ({"contig1": {"geneA": [(10, 10)]}}, "start (10) must be < end (10)"),
-        (
-            {"contig1": {"geneA": [(5, 15)]}},
-            "end (15) exceeds contig length (10)",
-        ),
-        (
-            {"missing_contig": {"geneA": [(1, 5)]}},
-            "not found in BAM references",
-        ),
+        ("contig1", [(10, 10)], "start (10) must be < end (10)"),
+        ("contig1", [(5, 15)], "end (15) exceeds contig length (10)"),
+        ("missing_contig", [(1, 5)], "not found in BAM references"),
     ],
 )
 def test_quantify_gene_coverage_edge_guards_raise_clean_value_errors(
-    coords, message_fragment
+    contig, parts, message_fragment
 ):
     mock_bam = MockBam(
         references=["contig1"], contig_lengths={"contig1": 10}, default_depth=5
     )
+    genes = [Gene(gene_id="geneA", contig=contig, parts=parts)]
 
     with pytest.raises(ValueError, match=re.escape(message_fragment)):
         gene_coverage.quantify_gene_coverage(
-            mock_bam, coords, min_depth=1, min_quality=0
+            mock_bam, genes, min_depth=1, min_quality=0
         )

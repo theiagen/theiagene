@@ -168,7 +168,7 @@ class Variant:
             model.ref_coding[:cds_start] + coding_alt + model.ref_coding[cds_end:]
         )
         mut_protein = translate(mut_coding, model.transl_table)
-        ref_protein = model.ref_protein
+        ref_protein = model.protein
 
         hgvs_c = self._hgvs_c_indel(cds_start, cds_end, coding_alt)
         so_term, hgvs_p = _protein_consequence(

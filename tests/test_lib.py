@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from theiagene.lib import query, sequence, io_utils, gff
+from theiagene.lib import query, sequence, io_utils, gff, gene_model, parsers
 
 
 # --------------------------------------------------------------------------- #
@@ -118,9 +118,21 @@ def test_parse_gff_attributes_splits_and_percent_decodes():
     }
 
 
-def test_parse_gff_attributes_ignores_malformed_fields():
+def test_parse_gff_attributes_empty_column_is_empty_dict():
+    # an empty (or bare-';') attribute column is valid GFF3, not malformed
     assert gff.parse_gff_attributes("") == {}
-    assert gff.parse_gff_attributes("novalue;ID=x") == {"ID": "x"}
+    assert gff.parse_gff_attributes(";") == {}
+
+
+def test_parse_gff_attributes_raises_on_malformed_field():
+    # a field lacking the value delimiter is malformed and must raise
+    with pytest.raises(ValueError, match="unexpected attributes field"):
+        gff.parse_gff_attributes("novalue;ID=x")
+
+
+def test_parse_gff_attributes_keeps_value_containing_delimiter():
+    # only the first '=' splits key from value, so an '=' in the value survives
+    assert gff.parse_gff_attributes("note=a=b") == {"note": "a=b"}
 
 
 def test_iter_gff_features_converts_coordinates_and_strand(tmp_path):
@@ -160,3 +172,110 @@ def test_iter_gff_features_marks_unresolved_strand_as_none(tmp_path):
     path.write_text("chr1\t.\tCDS\t10\t33\t.\t.\t0\tID=a\n")
     feats = list(gff.iter_gff_features(str(path), "CDS"))
     assert feats[0]["strand"] is None
+
+
+# --------------------------------------------------------------------------- #
+# theiagene.lib.gene_model
+# --------------------------------------------------------------------------- #
+
+def test_gene_span_and_positions_are_derived_from_parts():
+    plus = gene_model.Gene("g", "chr1", strand=1, parts=[(9, 12), (3, 6)])
+    assert plus.genomic_start == 3
+    assert plus.genomic_end == 12
+    # translation order for a plus-strand gene is ascending across sorted parts
+    assert plus.genomic_positions == [3, 4, 5, 9, 10, 11]
+    minus = gene_model.Gene("g", "chr1", strand=-1, parts=[(3, 6), (9, 12)])
+    # minus-strand translation order is reversed
+    assert minus.genomic_positions == [11, 10, 9, 5, 4, 3]
+
+
+def test_gene_add_part_appends():
+    gene = gene_model.Gene("g", "chr1", strand=1)
+    assert gene.genomic_start is None
+    gene.add_part(3, 6)
+    gene.add_part(9, 12)
+    assert gene.parts == [(3, 6), (9, 12)]
+    assert (gene.genomic_start, gene.genomic_end) == (3, 12)
+
+
+def test_genemodel_derives_four_sequences_including_introns():
+    # two exons [3,6) + [9,12) flanking an intron [6,9); coding = ATG|TTT, intron CCC
+    contig = "AAA" + "ATG" + "CCC" + "TTT" + "AAA"
+    model = gene_model.GeneModel("g", "c", strand=1, parts=[(3, 6), (9, 12)])
+    model.finalize(contig)
+    assert model.ref_coding == "ATGTTT"          # spliced CDS (no intron)
+    assert model.protein == "MF"
+    assert model.rna == "AUGUUU"                  # spliced CDS as RNA
+    assert model.dna == "ATGCCCTTT"               # full span, intron included
+    assert model.revcomp_dna == sequence.reverse_complement(model.dna)
+    assert model.codon(1) == "ATG" and model.aa_at(1) == "M"
+
+
+def test_genemodel_minus_strand_sequences_are_coding_oriented():
+    contig = "AAA" + "ATG" + "CCC" + "TTT" + "AAA"
+    model = gene_model.GeneModel("g", "c", strand=-1, parts=[(3, 6), (9, 12)])
+    model.finalize(contig)
+    # dna is the full span on the coding (minus) strand; revcomp is the plus strand
+    assert model.dna == sequence.reverse_complement("ATGCCCTTT")
+    assert model.revcomp_dna == "ATGCCCTTT"
+    assert model.ref_coding == sequence.reverse_complement("ATGTTT")
+
+
+# --------------------------------------------------------------------------- #
+# theiagene.lib.parsers
+# --------------------------------------------------------------------------- #
+
+def test_match_identifiers_normalize_is_query_aware():
+    quals = {"product": ["lanosterol 14-alpha demethylase"], "gene": ["ERG11"]}
+    matched, identifiers = parsers.match_identifiers(
+        quals, ["lanosterol.14-alpha.demethylase"], ["product", "gene"],
+        exact_match=True, normalize=True,
+    )
+    # normalize path returns the query term that matched, spaces<->dots aware
+    assert matched == "lanosterol.14-alpha.demethylase"
+    assert "ERG11" in identifiers
+
+
+def test_match_identifiers_raw_returns_matching_identifier():
+    quals = {"product": ["FKS1"]}
+    # substring (normalize=False): query 'FKS' matches identifier 'FKS1',
+    # and the identifier itself is returned
+    matched, _ = parsers.match_identifiers(
+        quals, ["FKS"], ["product"], exact_match=False, normalize=False
+    )
+    assert matched == "FKS1"
+    none_match, _ = parsers.match_identifiers(
+        quals, ["ERG11"], ["product"], exact_match=False, normalize=False
+    )
+    assert none_match is None
+
+
+def test_resolve_contig_prefers_membership_and_falls_back():
+    assert parsers.resolve_contig(["a", "b"], {"b"}, True, "VCF") == "b"
+    # not required -> first candidate even when absent
+    assert parsers.resolve_contig(["a", "b"], {"z"}, False, "VCF") == "a"
+    with pytest.raises(KeyError, match="a and b not in VCF"):
+        parsers.resolve_contig(["a", "b"], {"z"}, True, "VCF")
+
+
+def test_iter_gff_raw_coalesces_multi_exon_cds(tmp_path):
+    path = tmp_path / "multi.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "chr1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;product=geneA\n"
+        "chr1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;product=geneA\n"
+    )
+    raws = list(parsers.iter_gff_raw(str(path), "CDS"))
+    assert len(raws) == 1
+    assert raws[0].parts == [(0, 6), (10, 16)]
+    assert raws[0].qualifiers["product"] == ["geneA"]  # accumulated as a list
+    assert raws[0].contig_seq is None                  # no FASTA supplied
+
+
+def test_parse_bed_genes_coalesces_rows_by_name(tmp_path):
+    bed = tmp_path / "q.bed"
+    bed.write_text("chr1\t0\t6\tgeneA\nchr1\t10\t16\tgeneA\nchr1\t0\t3\tgeneB\n")
+    genes = parsers.parse_bed_genes(str(bed), ["geneA", "geneB"], True, {"chr1"})
+    by_id = {g.gene_id: g for g in genes}
+    assert by_id["geneA"].parts == [(0, 6), (10, 16)]
+    assert by_id["geneB"].parts == [(0, 3)]

@@ -33,6 +33,11 @@ def complement(seq: str) -> str:
     return seq.translate(_COMPLEMENT)
 
 
+def reverse_complement(seq: str) -> str:
+    """Reverse complement of a nucleotide string"""
+    return complement(seq)[::-1]
+
+
 def translate(seq: str, table) -> str:
     """Translate a nucleotide string, truncating to a whole number of codons"""
     trimmed = seq[: len(seq) - (len(seq) % 3)]

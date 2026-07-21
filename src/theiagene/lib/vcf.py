@@ -4,11 +4,11 @@
 coordinates; ``gene_coverage`` uses it to pre-extract a ``GENE_VARIANTS.vcf``
 and ``variant_annotation`` consumes the resulting ``GENE`` INFO field.  Keeping
 it here (rather than importing across command modules) gives both commands a
-single, shared implementation of the coordinate model."""
+single, shared implementation of the coordinate model.  Both entry points take a
+list of :class:`~theiagene.lib.gene_model.Gene` objects."""
 
 import logging
 from collections import defaultdict
-from itertools import chain
 
 import pysam
 
@@ -18,30 +18,25 @@ from theiagene.lib.query import sanitize_info_value
 logger = logging.getLogger(__name__)
 
 
-def flatten_coords_by_contig(contig2query2coords: dict, full_range: bool = False) -> dict:
-    """Flatten to {<CONTIG>: [(START, END, QUERY), ...]} for interval overlap testing.
-    If full_range is True, each query is collapsed to a single (min START, max END) range
-    spanning all of its parts; otherwise every part is emitted separately"""
+def flatten_coords_by_contig(genes, full_range: bool = False) -> dict:
+    """Flatten Gene objects to {<CONTIG>: [(START, END, GENE_ID), ...]} for interval
+    overlap testing.  If full_range is True, each gene is collapsed to a single
+    (genomic_start, genomic_end) range spanning all of its parts; otherwise every
+    part is emitted separately"""
     contig2ranges = defaultdict(list)
-    for contig, query2coords in contig2query2coords.items():
-        for query, loc_parts in query2coords.items():
-            if full_range:
-                # collapse all parts of a query into a single spanning range
-                all_coords = [int(coord) for coord in chain.from_iterable(loc_parts)]
-                min_coord = min(all_coords)
-                max_coord = max(all_coords)
-                contig2ranges[contig].append((min_coord, max_coord, query))
-            else:
-                for coords in loc_parts:
-                    contig2ranges[contig].append(
-                        (int(coords[0]), int(coords[1]), query)
-                    )
+    for gene in genes:
+        if full_range:
+            # collapse all parts of a gene into a single spanning range
+            contig2ranges[gene.contig].append(
+                (gene.genomic_start, gene.genomic_end, gene.gene_id)
+            )
+        else:
+            for start, end in gene.parts:
+                contig2ranges[gene.contig].append((start, end, gene.gene_id))
     return contig2ranges
 
 
-def extract_vcf_genes(
-    vcffile: str, contig2query2coords: dict, output_vcf: str
-) -> int:
+def extract_vcf_genes(vcffile: str, genes, output_vcf: str) -> int:
     """Filter a VCF to variants overlapping query gene coordinates, annotating the
     overlapping gene name(s) in a GENE INFO field. Returns the count of written records"""
     vcf_in = pysam.VariantFile(vcffile)
@@ -55,8 +50,8 @@ def extract_vcf_genes(
         )
     vcf_out = pysam.VariantFile(output_vcf, "w", header=vcf_in.header)
 
-    # {<CONTIG>: [(START, END, QUERY), ...]} (0-based, half-open coordinates)
-    contig2ranges = flatten_coords_by_contig(contig2query2coords)
+    # {<CONTIG>: [(START, END, GENE_ID), ...]} (0-based, half-open coordinates)
+    contig2ranges = flatten_coords_by_contig(genes)
 
     written = 0
     for record in vcf_in:

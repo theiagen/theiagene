@@ -179,7 +179,7 @@ def test_alpha_reference_protein(gbff):
         gbff, {record.id for record in SeqIO.parse(gbff, "genbank")}, ["test gene alpha"], "CDS", "product", exact_match=True
     )
     assert models["test gene alpha"].ref_coding == ALPHA_CODING
-    assert models["test gene alpha"].ref_protein == "MYPKGFH*"
+    assert models["test gene alpha"].protein == "MYPKGFH*"
 
 
 # --------------------------------------------------------------------------- #
@@ -628,9 +628,9 @@ def test_extract_vcf_genes_indexing_is_zero_based_half_open(tmp_path):
     )
     output = tmp_path / "out.vcf"
 
-    contig2query2coords = {"contig1": {"geneA": [(10, 20)]}}
+    genes = [va.GeneModel(gene_id="geneA", contig="contig1", parts=[(10, 20)])]
     written = va.extract_vcf_genes(
-        str(vcf_in), contig2query2coords, str(output)
+        str(vcf_in), genes, str(output)
     )
 
     with pysam.VariantFile(str(output)) as handle:
