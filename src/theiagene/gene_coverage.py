@@ -24,7 +24,6 @@ from theiagene.lib.query import (  # noqa: F401
     extract_queries_from_bed,
 )
 from theiagene.lib.io_utils import write_json  # noqa: F401
-from theiagene.lib.vcf import extract_vcf_genes  # noqa: F401
 from theiagene.lib.gene_model import Gene
 from theiagene.lib.parsers import (
     iter_gbff_raw,
@@ -32,6 +31,7 @@ from theiagene.lib.parsers import (
     match_identifiers,
     resolve_contig,
     parse_bed_genes,
+    extract_vcf_genes,  # noqa: F401
 )
 from theiagene.lib.logging_config import configure_logging
 
@@ -300,7 +300,7 @@ def run_cli(args: argparse.Namespace) -> int:
             gene.contig = contig
 
     # optionally extract gene-overlapping variants from a VCF into a single VCF;
-    # the extraction routine lives in theiagene.lib.vcf (shared with the
+    # the extraction routine lives in theiagene.lib.parsers (shared with the
     # variant_annotation command) and is re-exported into this module
     if args.vcf:
         extract_vcf_genes(args.vcf, genes, "GENE_VARIANTS.vcf")

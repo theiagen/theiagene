@@ -53,12 +53,13 @@ from theiagene.lib.query import (  # noqa: F401
     match_query,
     ordered_query_genes,
 )
-from theiagene.lib.vcf import extract_vcf_genes, flatten_coords_by_contig  # noqa: F401
-from theiagene.lib.parsers import (
+from theiagene.lib.parsers import (  # noqa: F401
     iter_gbff_raw,
     iter_gff_raw,
     match_identifiers,
     resolve_contig,
+    extract_vcf_genes,
+    flatten_coords_by_contig,
 )
 from theiagene.lib.logging_config import configure_logging
 

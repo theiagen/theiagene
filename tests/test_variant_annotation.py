@@ -603,7 +603,7 @@ def test_normalize_indel(pos0, ref, alt, expected):
 
 
 # --------------------------------------------------------------------------- #
-# gene VCF extraction (shared theiagene.lib.vcf helper, re-exported here)
+# gene VCF extraction (shared theiagene.lib.parsers helper, re-exported here)
 # --------------------------------------------------------------------------- #
 
 def _write_mock_vcf(path, contig="contig1", contig_length=100, variants=None):
