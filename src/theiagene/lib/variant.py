@@ -67,7 +67,7 @@ class Variant:
 
         expected = model.ref_coding[cds_idx]
         if expected != coding_ref:
-            logger.warning(
+            raise ValueError (
                 f"{model.gene_id}: reference base '{expected}' at c.{cds_idx + 1} "
                 f"disagrees with VCF REF '{coding_ref}' (coding strand)"
             )
