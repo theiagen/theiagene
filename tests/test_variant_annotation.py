@@ -686,3 +686,84 @@ def test_run_gene_vcf_none_writes_no_file(gbff, tmp_path, monkeypatch):
            exact_match=True, gene_vcf=None)
 
     assert not (tmp_path / "GENE_VARIANTS.vcf").exists()
+
+
+# --------------------------------------------------------------------------- #
+# alternatively-spliced isoforms: one GeneModel per coding transcript
+# --------------------------------------------------------------------------- #
+
+def _make_multi_isoform_gff_and_fa(gff_path, fa_path):
+    """One gene ``M`` with two spliced isoforms sharing exon1 [0, 6):
+    M1 = CDS [0,6)+[10,16) -> ATG TAT CCC TGA (M Y P *);
+    M2 = CDS [0,6)+[20,26) -> ATG TAT GGG TGA (M Y G *)."""
+    contig = "ATGTAT" + "AAAA" + "CCCTGA" + "AAAA" + "GGGTGA" + "AAAA"  # len 30
+    rec = SeqRecord(Seq(contig), id="chrM", description="")
+    with open(fa_path, "w") as handle:
+        SeqIO.write([rec], handle, "fasta")
+    lines = [
+        "##gff-version 3",
+        "chrM\t.\tgene\t1\t30\t.\t+\t.\tID=gene-M;gene=M",
+        "chrM\t.\tmRNA\t1\t30\t.\t+\t.\tID=rna-M1;Parent=gene-M",
+        "chrM\t.\tmRNA\t1\t30\t.\t+\t.\tID=rna-M2;Parent=gene-M",
+        "chrM\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-M1;Parent=rna-M1;product=M1",
+        "chrM\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-M1;Parent=rna-M1;product=M1",
+        "chrM\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-M2;Parent=rna-M2;product=M2",
+        "chrM\t.\tCDS\t21\t26\t.\t+\t0\tID=cds-M2;Parent=rna-M2;product=M2",
+    ]
+    with open(gff_path, "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+@pytest.fixture
+def multi_isoform_gff_fa(tmp_path):
+    gff = tmp_path / "iso.gff"
+    fa = tmp_path / "iso.fa"
+    _make_multi_isoform_gff_and_fa(gff, fa)
+    return str(gff), str(fa)
+
+
+def test_multi_isoform_builds_one_model_per_transcript(multi_isoform_gff_fa):
+    gff, fa = multi_isoform_gff_fa
+    models = va.build_gene_models_gff(gff, fa, {"chrM"}, ["M"], "product", exact_match=True)
+    distinct = list(dict.fromkeys(models.values()))
+    assert len(distinct) == 2
+    by_product = {m.product: m for m in distinct}
+    assert by_product["M1"].ref_coding == "ATGTATCCCTGA" and by_product["M1"].protein == "MYP*"
+    assert by_product["M2"].ref_coding == "ATGTATGGGTGA" and by_product["M2"].protein == "MYG*"
+    # both isoforms share the normalized gene id; each is recoverable by its transcript id
+    assert by_product["M1"].gene_id == "M" and by_product["M2"].gene_id == "M"
+    assert models["rna-M1"] is by_product["M1"]
+    assert models["rna-M2"] is by_product["M2"]
+
+
+def test_multi_isoform_shared_exon_variant_reports_both(multi_isoform_gff_fa, tmp_path):
+    # a variant in the shared exon1 hits both isoforms -> one entry each, same
+    # c./p. notation, distinguished by product
+    gff, fa = multi_isoform_gff_fa
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chrM", 30, [(5, "A", "T")])  # genomic 4, codon 2 TAT->TTT
+    report = va.run(str(vcf), None, gff, fa, ["M"], exact_match=True, gene_vcf=None)
+    assert "M: M1 (" in report and "M: M2 (" in report
+    assert report.count("missense_variant c.5A>T p.Tyr2Phe") == 2
+
+
+def test_multi_isoform_variant_unique_to_one_isoform(multi_isoform_gff_fa, tmp_path):
+    # a variant in M1's private exon2 is coding for M1 only; M2 overlaps by span
+    # but the base is intronic to it, so only M1 is reported
+    gff, fa = multi_isoform_gff_fa
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chrM", 30, [(11, "C", "A")])  # genomic 10 = M1 exon2 first base
+    report = va.run(str(vcf), None, gff, fa, ["M"], exact_match=True, gene_vcf=None)
+    assert "missense_variant c.7C>A p.Pro3Thr" in report
+    assert "M: M1 (" in report
+    assert "M: M2 (" not in report
+    assert report.count("M: ") == 1
+
+
+def test_gbff_model_wrapped_in_spoof_transcript(gbff):
+    # GBFF has no transcript layer: each CDS becomes a <gene_id>_mRNA spoof transcript
+    models = va.build_gene_models_gbff(
+        gbff, {rec.id for rec in SeqIO.parse(gbff, "genbank")},
+        ["test gene alpha"], "product", exact_match=True,
+    )
+    assert models["test gene alpha"].transcript_id == "test.gene.alpha_mRNA"

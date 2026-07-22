@@ -370,3 +370,93 @@ def test_parse_bed_genes_coalesces_rows_by_name(tmp_path):
     by_id = {g.gene_id: g for g in genes}
     assert by_id["geneA"].cds == [(0, 6), (10, 16)]
     assert by_id["geneB"].cds == [(0, 3)]
+
+
+# --------------------------------------------------------------------------- #
+# theiagene.lib.gene_model -- Transcript and multi-transcript Gene
+# --------------------------------------------------------------------------- #
+
+def test_transcript_coordinates_and_translation_order():
+    plus = gene_model.Transcript("t1", strand=1, parts={"CDS": [(9, 12), (3, 6)]})
+    assert (plus.genomic_start, plus.genomic_end) == (3, 12)
+    assert plus.cds == [(9, 12), (3, 6)]
+    assert plus.cds_positions == [3, 4, 5, 9, 10, 11]
+    minus = gene_model.Transcript("t2", strand=-1, parts={"CDS": [(3, 6), (9, 12)]})
+    assert minus.cds_positions == [11, 10, 9, 5, 4, 3]
+
+
+def test_transcript_add_part_appends_tuples():
+    transcript = gene_model.Transcript("t", strand=1)
+    transcript.add_part(3, 6)
+    transcript.add_part(9, 12)
+    assert transcript.parts == {"CDS": [(3, 6), (9, 12)]}
+
+
+def test_gene_unions_multiple_transcripts():
+    # a locus holding two isoforms sharing exon1 [0, 6)
+    a = gene_model.Transcript("rna-1", strand=1, parts={"CDS": [(0, 6), (10, 16)]})
+    b = gene_model.Transcript("rna-2", strand=1, parts={"CDS": [(0, 6), (20, 26)]})
+    gene = gene_model.Gene("g", "chr1", strand=1, transcripts={"rna-1": a, "rna-2": b})
+    assert [t.transcript_id for t in gene.coding_transcripts()] == ["rna-1", "rna-2"]
+    # the union views pool both isoforms' coordinates
+    assert (gene.genomic_start, gene.genomic_end) == (0, 26)
+    assert sorted(set(gene.cds)) == [(0, 6), (10, 16), (20, 26)]
+    # each transcript keeps its own coordinates
+    assert a.cds == [(0, 6), (10, 16)]
+    assert b.cds == [(0, 6), (20, 26)]
+
+
+def test_genemodel_from_transcript_builds_single_isoform():
+    # exon1 [0,6) + exon2 [10,16): coding ATG TAT | CCC TGA (M Y P *)
+    contig = "ATGTAT" + "AAAA" + "CCCTGA" + "AAAA"
+    transcript = gene_model.Transcript("rna-1", strand=1, parts={"CDS": [(0, 6), (10, 16)]})
+    gene = gene_model.Gene("g", "c", strand=1, transcripts={"rna-1": transcript}, contig_seq=contig)
+    model = gene_model.GeneModel.from_transcript(gene, transcript)
+    assert model.ref_coding == "ATGTATCCCTGA"
+    assert model.protein == "MYP*"
+    assert model.transcript_id == "rna-1" and model.gene_id == "g"
+
+
+def test_iter_gff_raw_two_mrnas_yield_two_coding_transcripts(tmp_path):
+    # one gene, two mRNAs (two isoforms) sharing exon1 [0,6): the CDS assimilate
+    # onto their own transcript (the mRNA child of the gene), not a single model
+    path = tmp_path / "iso.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "chrM\t.\tgene\t1\t30\t.\t+\t.\tID=gene-M;gene=M\n"
+        "chrM\t.\tmRNA\t1\t30\t.\t+\t.\tID=rna-M1;Parent=gene-M\n"
+        "chrM\t.\tmRNA\t1\t30\t.\t+\t.\tID=rna-M2;Parent=gene-M\n"
+        "chrM\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-M1;Parent=rna-M1;product=M1\n"
+        "chrM\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-M1;Parent=rna-M1;product=M1\n"
+        "chrM\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-M2;Parent=rna-M2;product=M2\n"
+        "chrM\t.\tCDS\t21\t26\t.\t+\t0\tID=cds-M2;Parent=rna-M2;product=M2\n"
+    )
+    raws = list(parsers.iter_gff_raw(str(path)))
+    assert len(raws) == 1
+    gene = raws[0]
+    by_id = {t.transcript_id: t for t in gene.coding_transcripts()}
+    assert set(by_id) == {"rna-M1", "rna-M2"}
+    assert by_id["rna-M1"].cds == [(0, 6), (10, 16)]
+    assert by_id["rna-M2"].cds == [(0, 6), (20, 26)]
+    # per-isoform product is carried on each transcript
+    assert by_id["rna-M1"].qualifiers["product"] == ["M1"]
+    # the gene-level union pools both isoforms' CDS (and matches on either product)
+    assert sorted(set(gene.cds)) == [(0, 6), (10, 16), (20, 26)]
+    assert gene.qualifiers["gene"] == ["M"]
+
+
+def test_iter_gff_raw_spoof_transcript_for_gene_direct_cds(tmp_path):
+    # a CDS hanging directly off the gene is wrapped in a <gene>_mRNA spoof
+    # transcript so it is still modelled
+    path = tmp_path / "direct.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "chr1\t.\tgene\t1\t6\t.\t-\t.\tID=gene-B;gene=FKS1\n"
+        "chr1\t.\tCDS\t1\t6\t.\t-\t0\tID=cds-B;Parent=gene-B;product=glucan synthase\n"
+    )
+    raws = list(parsers.iter_gff_raw(str(path)))
+    assert len(raws) == 1
+    coding = raws[0].coding_transcripts()
+    assert len(coding) == 1
+    assert coding[0].transcript_id == "gene-B_mRNA"
+    assert coding[0].cds == [(0, 6)]
