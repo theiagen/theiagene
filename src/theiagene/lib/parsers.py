@@ -254,8 +254,15 @@ def iter_gff_raw(reference_gff: str, fa_dict: dict = None):
         if feature["type"].lower() == "cds" and feature["strand"] is not None:
             transcript["strand"] = feature["strand"]
 
+    # materialize each contig once and share it across every gene on it: str(Seq)
+    # decodes a fresh copy per call, so deriving it per gene holds as many
+    # full-contig copies as there are matched genes (models share by reference)
+    contig_seqs = {}
+
     for group in groups.values():
         seqid = group["seqid"]
+        if fa_dict is not None and seqid in fa_dict and seqid not in contig_seqs:
+            contig_seqs[seqid] = str(fa_dict[seqid].seq)
         transcripts = {}
         for tid in group["torder"]:
             raw_transcript = group["transcripts"][tid]
@@ -274,11 +281,7 @@ def iter_gff_raw(reference_gff: str, fa_dict: dict = None):
             strand=group["strand"],
             qualifiers=group["qualifiers"],
             transcripts=transcripts,
-            contig_seq=(
-                str(fa_dict[seqid].seq)
-                if fa_dict is not None and seqid in fa_dict
-                else None
-            ),
+            contig_seq=contig_seqs.get(seqid),
         )
 
 
