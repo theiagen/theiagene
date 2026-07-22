@@ -3,13 +3,7 @@
 Given a BAM and query-gene coordinates (from a reference GBFF/GFF or a BED
 file), this command reports the average depth and percent coverage of each
 query gene as JSON (``DEPTH_DICT.json``, ``COVERAGE_DICT.json``) and a readable
-``COVERAGE_STATS.tsv``.  (Extraction of gene-overlapping variants from a VCF now
-lives in the ``variant_annotation`` command.)
-
-This is the ``gene_coverage`` subcommand of the ``theiagene`` entrypoint; it was
-formerly the standalone ``gene_coverage.py`` script (a
-``task_gene_coverage.wdl`` dependency in
-github.com/theiagen/public_health_bioinformatics)."""
+``COVERAGE_STATS.tsv``."""
 
 import sys
 import logging
@@ -18,12 +12,9 @@ import argparse
 import pysam
 
 # shared helpers, re-exported so callers (and tests) can reach them here
-from theiagene.lib.query import (  # noqa: F401
-    exact_check,
-    substring_check,
+from theiagene.lib.query import
     extract_queries_from_bed,
-)
-from theiagene.lib.io_utils import write_json  # noqa: F401
+from theiagene.lib.io_utils import write_json
 from theiagene.lib.gene_model import Gene
 from theiagene.lib.parsers import (
     import_bam,
