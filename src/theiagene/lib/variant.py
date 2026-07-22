@@ -8,7 +8,7 @@ the pure protein-comparison routines it relies on."""
 
 import logging
 
-from theiagene.lib.sequence import aa3, complement, translate
+from theiagene.lib.sequence import aa3, complement, is_start_codon, translate
 from theiagene.lib.gene_model import GeneModel
 
 
@@ -102,7 +102,7 @@ class Variant:
         elif ref_aa == "*":
             so_term = "stop_lost"
             hgvs_p = f"p.Ter{codon_number}{aa3(alt_aa)}"
-        elif codon_number == 1 and ref_aa == "M":
+        elif codon_number == 1 and is_start_codon(ref_codon, model.transl_table):
             so_term = "start_lost"
             hgvs_p = f"p.{aa3(ref_aa)}1{aa3(alt_aa)}"
         else:

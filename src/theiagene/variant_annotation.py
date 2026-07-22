@@ -300,7 +300,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "--transl_table",
         type=int,
         default=None,
-        help="override the genetic code (default: read /transl_table from each CDS)",
+        help="override the NCBI genetic code (www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi)" \
+           + " (default: read /transl_table from each CDS)",
     )
     parser.add_argument(
         "--annotate_downstream_of_frameshift",

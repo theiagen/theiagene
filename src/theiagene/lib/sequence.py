@@ -1,7 +1,7 @@
 """Nucleotide/protein sequence helpers shared by the theiagene commands."""
 
 from Bio.Seq import Seq
-from Bio.Data import IUPACData
+from Bio.Data import IUPACData, CodonTable
 
 
 # single-letter -> three-letter amino acid codes, with HGVS extensions
@@ -26,6 +26,16 @@ def is_nucleotide_allele(allele) -> bool:
 def aa3(aa: str) -> str:
     """Return the three-letter code for a one-letter amino acid symbol"""
     return _AA_1TO3.get(aa.upper(), "Xaa")
+
+
+def is_start_codon(codon: str, table) -> bool:
+    """True if ``codon`` is a valid initiator for the genetic code ``table``.
+
+    Initiation is not limited to ATG: the standard eukaryotic code also admits
+    CTG and TTG, and bacterial codes add GTG plus the ATT/ATC/ATA set.  A lone
+    codon is translated without the initiator rule, so a start codon cannot be
+    identified by its amino acid."""
+    return codon.upper() in CodonTable.unambiguous_dna_by_id[table].start_codons
 
 
 def complement(seq: str) -> str:
