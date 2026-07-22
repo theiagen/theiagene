@@ -1,6 +1,6 @@
 """Unified ``theiagene`` command-line entrypoint.
 
-Dispatches to the ``gene_coverage`` and ``variant_annotation`` subcommands, each
+Dispatches subcommands, each
 of which registers its own arguments and runs its own pipeline."""
 
 import sys
@@ -20,7 +20,7 @@ _SUBCOMMANDS = (
     (
         "variant_annotation",
         variant_annotation,
-        "annotate the protein-level consequences of gene-overlapping variants",
+        "annotate the protein-level consequences of gene variants",
     ),
 )
 
@@ -29,9 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the top-level parser with one subparser per subcommand"""
     parser = argparse.ArgumentParser(
         prog="theiagene",
-        description="Theiagen gene coverage and variant annotation toolkit "
-        "(dependency of task_gene_coverage.wdl; "
-        "github.com/theiagen/public_health_bioinformatics)",
+        description="Theiagen gene manipulation toolkit (theiagene)"
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
