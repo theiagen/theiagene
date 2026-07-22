@@ -36,14 +36,12 @@ class Transcript:
         self,
         transcript_id=None,
         strand=None,
-        transl_table=1,
         product=None,
         parts=None,
         qualifiers=None,
     ):
         self.transcript_id = transcript_id
         self.strand = strand
-        self.transl_table = transl_table
         self.product = product
         # parts must be a {feature_type: [(start, end), ...]} dict (0-based,
         # half-open); CDS segments live under a "CDS" key (see the cds property)
@@ -123,7 +121,6 @@ class Gene:
         gene_id=None,
         contig=None,
         strand=None,
-        transl_table=1,
         product=None,
         parts=None,
         qualifiers=None,
@@ -134,7 +131,6 @@ class Gene:
         self.gene_id = gene_id
         self.contig = contig
         self.strand = strand
-        self.transl_table = transl_table
         self.product = product if product is not None else gene_id
         self.qualifiers = qualifiers if qualifiers is not None else {}
         self.contig_seq = contig_seq
@@ -168,7 +164,6 @@ class Gene:
             transcript = Transcript(
                 transcript_id=self.gene_id,
                 strand=self.strand,
-                transl_table=self.transl_table,
                 product=self.product,
             )
             self.transcripts[_DEFAULT_TRANSCRIPT] = transcript
@@ -190,7 +185,6 @@ class Gene:
                 transcript = Transcript(
                     transcript_id=transcript_id,
                     strand=self.strand,
-                    transl_table=self.transl_table,
                     product=self.product,
                 )
                 self.transcripts[transcript_id] = transcript
@@ -283,11 +277,13 @@ class GeneModel(Transcript):
         super().__init__(
             transcript_id=transcript_id if transcript_id is not None else gene_id,
             strand=strand,
-            transl_table=transl_table,
             product=product if product is not None else gene_id,
             parts=parts,
             qualifiers=qualifiers,
         )
+        # the genetic code lives only on the model (the sequence-bearing class);
+        # Transcript/Gene are coordinate containers and carry no translation table
+        self.transl_table = transl_table
         self.gene_id = gene_id
         self.contig = contig
         self.contig_seq = contig_seq
@@ -326,7 +322,6 @@ class GeneModel(Transcript):
             gene_id=gene.gene_id,
             contig=gene.contig,
             strand=gene.strand,
-            transl_table=gene.transl_table,
             product=gene.product,
             parts=gene.parts,
             qualifiers=gene.qualifiers,
@@ -350,8 +345,10 @@ class GeneModel(Transcript):
     ) -> "GeneModel":
         """Generate a finalized :class:`GeneModel` for one transcript of a gene.
 
-        Identity fields are taken from the explicit keyword when given, else the
-        transcript, else the gene.  A transcript with no id is named
+        Identity fields (``gene_id``/``contig``/``product``/``strand``) are taken
+        from the explicit keyword when given, else the transcript, else the gene;
+        ``transl_table`` comes from the keyword, else the standard code (1), since
+        the coordinate classes carry none.  A transcript with no id is named
         ``<gene_id>_mRNA``.  Requires the transcript to carry CDS coordinates and
         the gene to carry a reference sequence."""
         if not transcript.cds:
@@ -373,11 +370,7 @@ class GeneModel(Transcript):
             gene_id=gid,
             contig=contig if contig is not None else gene.contig,
             strand=resolved_strand,
-            transl_table=(
-                transl_table
-                if transl_table is not None
-                else (transcript.transl_table or gene.transl_table)
-            ),
+            transl_table=transl_table if transl_table is not None else 1,
             product=(
                 product if product is not None else (transcript.product or gene.product)
             ),
