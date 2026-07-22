@@ -38,7 +38,6 @@ import argparse
 from collections import defaultdict
 
 import pysam
-from Bio import SeqIO
 
 # shared helpers, re-exported so callers (and tests) can reach them here
 from theiagene.lib.sequence import (  # noqa: F401
@@ -54,10 +53,8 @@ from theiagene.lib.query import (  # noqa: F401
     ordered_query_genes,
 )
 from theiagene.lib.parsers import (  # noqa: F401
-    iter_gbff_raw,
-    iter_gff_raw,
-    match_identifiers,
-    resolve_contig,
+    build_gene_models_gbff,
+    build_gene_models_gff,
     extract_vcf_genes,
     flatten_coords_by_contig,
 )
@@ -69,145 +66,6 @@ from theiagene.lib.variant import Variant
 
 
 logger = logging.getLogger(__name__)
-
-
-def _id_qualifiers(feature_qualifier: str) -> list:
-    """CDS qualifiers matched for query resolution (query sets may mix product
-    names and locus tags), the feature qualifier first"""
-    return [feature_qualifier.strip(), "gene", "locus_tag", "protein_id"]
-
-
-def _register_model(models_by_key: dict, model: GeneModel, key_sources) -> None:
-    """Register a model under raw/sanitized/normalized forms of every identifier,
-    so it can be recovered from whatever identifier the VCF ``GENE`` field carries"""
-    keys = set()
-    for ident in key_sources:
-        keys.update((ident, sanitize_info_value(ident), normalize_name(ident)))
-    for key in keys:
-        if not key:
-            continue
-        if key in models_by_key and models_by_key[key] is not model:
-            logger.warning(f"'{key}' recovered multiple times; keeping first")
-        else:
-            models_by_key[key] = model
-
-
-def _assemble_model(raw, contig, matched_query, feature_qualifier, transl_table_override):
-    """Resolve a matched Gene's identity and generate its GeneModel.
-    Returns (model, gene_id, product)"""
-    qualifier = feature_qualifier.strip()
-    if transl_table_override is not None:
-        transl_table = transl_table_override
-    else:
-        transl_table = int(raw.qualifiers.get("transl_table", ["1"])[0])
-    product_vals = raw.qualifiers.get(qualifier)
-    product = product_vals[0] if product_vals else matched_query
-    gene_id = normalize_name(matched_query)
-    # stamp the resolved identity onto the parsed Gene, then let the GeneModel
-    # derive itself from it (it carries the CDS coordinates and reference sequence)
-    raw.gene_id = gene_id
-    raw.product = product
-    raw.contig = contig
-    raw.transl_table = transl_table
-    model = GeneModel.from_gene(raw)
-    return model, gene_id, product
-
-
-def build_gene_models_gbff(
-    reference_gbff: str,
-    contig_names: set,
-    query_genes,
-    feature_qualifier: str,
-    exact_match: bool = False,
-    transl_table_override: int = None,
-) -> dict:
-    """Parse a GBFF into {lookup_key: GeneModel} for every query gene.
-
-    A CDS is matched by the ``feature_qualifier`` value plus its ``gene``,
-    ``locus_tag`` and ``protein_id`` qualifiers, so query sets may mix product
-    names and locus tags.  A model is registered under many lookup keys (raw,
-    sanitized and normalized forms of every identifier) so it can be recovered
-    from whatever identifier the VCF ``GENE`` field carries."""
-    query_list = list(query_genes)
-    id_qualifiers = _id_qualifiers(feature_qualifier)
-    models_by_key = {}
-    for raw in iter_gbff_raw(reference_gbff):
-        matched_query, identifiers = match_identifiers(
-            raw.qualifiers, query_list, id_qualifiers,
-            exact_match=exact_match, normalize=True,
-        )
-        if matched_query is None:
-            continue
-        if raw.strand not in (1, -1):
-            logger.warning(
-                f"Skipping '{matched_query}': unresolved strand ({raw.strand})"
-            )
-            continue
-        if not raw.cds:
-            logger.warning(f"Skipping '{matched_query}': no CDS coordinates to model")
-            continue
-        contig = resolve_contig(raw.contig_candidates, contig_names, True, "VCF")
-        model, gene_id, product = _assemble_model(
-            raw, contig, matched_query, feature_qualifier, transl_table_override
-        )
-        _register_model(
-            models_by_key, model, identifiers + [matched_query, product, gene_id]
-        )
-    return models_by_key
-
-
-def build_gene_models_gff(
-    reference_gff: str,
-    reference_fa: str,
-    contig_names: set,
-    query_genes,
-    feature_qualifier: str,
-    exact_match: bool = False,
-    transl_table_override: int = None,
-) -> dict:
-    """Parse a GFF and genome FA into {lookup_key: GeneModel} for every query gene.
-
-    A CDS is matched by the ``feature_qualifier`` value plus its ``gene``,
-    ``locus_tag`` and ``protein_id`` attributes, so query sets may mix product
-    names and locus tags.  Multi-exon CDS are assimilated through the GFF3
-    parent/child hierarchy (``CDS -> RNA -> gene``) and assembled in translation
-    order into a single coding model, mirroring the GBFF backend.  A model is
-    registered under many lookup keys (raw, sanitized and normalized forms of
-    every identifier) so it can be recovered from whatever identifier the VCF
-    ``GENE`` field carries.
-
-    The coding phase column is not applied; as with the GBFF backend, each CDS
-    is assumed to begin on a codon boundary."""
-    query_list = list(query_genes)
-    id_qualifiers = _id_qualifiers(feature_qualifier)
-    fa_dict = SeqIO.to_dict(SeqIO.parse(reference_fa, "fasta"))
-    models_by_key = {}
-    for raw in iter_gff_raw(reference_gff, fa_dict):
-        matched_query, identifiers = match_identifiers(
-            raw.qualifiers, query_list, id_qualifiers,
-            exact_match=exact_match, normalize=True,
-        )
-        if matched_query is None:
-            continue
-        if raw.strand not in (1, -1):
-            logger.warning(
-                f"Skipping '{matched_query}': unresolved strand ({raw.strand})"
-            )
-            continue
-        if not raw.cds:
-            logger.warning(f"Skipping '{matched_query}': no CDS coordinates to model")
-            continue
-        # check appropriate contig is used for the VCF and available in the FASTA
-        contig = resolve_contig(raw.contig_candidates, contig_names, True, "VCF")
-        if raw.contig_seq is None:
-            raise KeyError(f"{contig} not in reference FASTA")
-        model, gene_id, product = _assemble_model(
-            raw, contig, matched_query, feature_qualifier, transl_table_override
-        )
-        _register_model(
-            models_by_key, model, identifiers + [matched_query, product, gene_id]
-        )
-    return models_by_key
 
 
 def normalize_indel(pos0: int, ref: str, alt: str) -> tuple:

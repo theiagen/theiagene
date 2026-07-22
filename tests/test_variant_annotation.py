@@ -636,7 +636,7 @@ def test_extract_vcf_genes_indexing_is_zero_based_half_open(tmp_path):
     )
     output = tmp_path / "out.vcf"
 
-    genes = [va.GeneModel(gene_id="geneA", contig="contig1", parts=[(10, 20)])]
+    genes = [va.GeneModel(gene_id="geneA", contig="contig1", parts={"CDS": [(10, 20)]})]
     written = va.extract_vcf_genes(
         str(vcf_in), genes, str(output)
     )

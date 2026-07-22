@@ -47,14 +47,17 @@ class Gene:
         self.strand = strand
         self.transl_table = transl_table
         self.product = product if product is not None else gene_id
-        # parts is a {feature_type: [(start, end), ...]} dict; a bare list is
-        # accepted as a convenience and filed under the "CDS" key
+        # parts must be a {feature_type: [(start, end), ...]} dict (0-based,
+        # half-open); CDS segments live under a "CDS" key (see the cds property)
         self.parts = {}
-        if isinstance(parts, dict):
+        if parts:
+            if not isinstance(parts, dict):
+                raise TypeError(
+                    "Gene 'parts' must be a {feature_type: [(start, end), ...]} "
+                    f"dict, not {type(parts).__name__}"
+                )
             for feature, segments in parts.items():
                 self.parts[feature] = [(int(s), int(e)) for s, e in segments]
-        elif parts:
-            self.parts["CDS"] = [(int(s), int(e)) for s, e in parts]
         self.qualifiers = qualifiers if qualifiers is not None else {}
         self.contig_seq = contig_seq
         self.contig_candidates = (

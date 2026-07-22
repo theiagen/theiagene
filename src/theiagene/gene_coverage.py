@@ -26,6 +26,7 @@ from theiagene.lib.query import (  # noqa: F401
 from theiagene.lib.io_utils import write_json  # noqa: F401
 from theiagene.lib.gene_model import Gene
 from theiagene.lib.parsers import (
+    import_bam,
     iter_gbff_raw,
     iter_gff_raw,
     match_identifiers,
@@ -84,74 +85,6 @@ def _coverage_genes(
         for start, end in raw.cds:
             gene.add_part(start, end)
     return [genes[key] for key in order]
-
-
-def parse_gff(
-    contig_names: set,
-    reference_gff: str,
-    query_set: set,
-    feature_qualifier: str,
-    exact_match: bool = False,
-    require_contig: bool = True,
-) -> list:
-    """Parse a GFF into a list of Gene objects (coordinates only).
-
-    A gene's CDS segments are assimilated through the GFF3 parent/child hierarchy
-    into a single Gene carrying every segment, akin to how ``parse_bed``
-    accumulates multiple BED rows for one gene."""
-    return _coverage_genes(
-        iter_gff_raw(reference_gff),
-        query_set, feature_qualifier, exact_match, contig_names, require_contig,
-    )
-
-
-def parse_gbff(
-    contig_names: set,
-    reference_gbff: str,
-    query_set: set,
-    feature_qualifier: str,
-    exact_match: bool = False,
-    require_contig: bool = True,
-) -> list:
-    """Parse a GBFF into a list of Gene objects (coordinates only)"""
-    return _coverage_genes(
-        iter_gbff_raw(reference_gbff),
-        query_set, feature_qualifier, exact_match, contig_names, require_contig,
-    )
-
-
-def parse_bed(
-    contig_names: set,
-    bedfile: str,
-    query_set: set,
-    exact_match: bool = False,
-    require_contig: bool = True,
-) -> list:
-    """Parse a BED file into a list of Gene objects (coordinates only)"""
-    return parse_bed_genes(
-        bedfile, query_set, exact_match, contig_names, require_contig
-    )
-
-
-def import_bam(
-    bamfile: str, ambiguous_contig: bool
-) -> tuple:
-    imported_bam = pysam.AlignmentFile(bamfile)
-    # generate an index if it does not exist
-    if not imported_bam.has_index():
-        logger.debug("Generating BAM index")
-        pysam.index(bamfile)
-        imported_bam = pysam.AlignmentFile(bamfile)
-
-    # determine if import is compatible with a single contig reference
-    contig_names = imported_bam.references
-    if ambiguous_contig:
-        # can't apply ambiguous contig approach if there are multiple contigs
-        if len(contig_names) > 1:
-            raise ValueError(
-                "can't use ambiguous_contig coordinates when there are multiple contigs in the reference"
-            )
-    return imported_bam
 
 
 def quantify_gene_coverage(
@@ -268,26 +201,20 @@ def run_cli(args: argparse.Namespace) -> int:
     require_contig = not args.ambiguous_contig
     genes = []
     if args.reference_gbff:
-        genes = parse_gbff(
-            contig_names,
-            args.reference_gbff,
-            query_set,
-            args.feature_qualifier,
-            args.exact_match,
-            require_contig,
+        genes = _coverage_genes(
+            iter_gbff_raw(args.reference_gbff),
+            query_set, args.feature_qualifier, args.exact_match,
+            contig_names, require_contig,
         )
     elif args.reference_gff:
-        genes = parse_gff(
-            contig_names,
-            args.reference_gff,
-            query_set,
-            args.feature_qualifier,
-            args.exact_match,
-            require_contig,
+        genes = _coverage_genes(
+            iter_gff_raw(args.reference_gff),
+            query_set, args.feature_qualifier, args.exact_match,
+            contig_names, require_contig,
         )
     if args.bedfile:
-        genes += parse_bed(
-            contig_names, args.bedfile, query_set, args.exact_match, require_contig
+        genes += parse_bed_genes(
+            args.bedfile, query_set, args.exact_match, contig_names, require_contig
         )
 
     if args.ambiguous_contig:

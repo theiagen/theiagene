@@ -50,12 +50,13 @@ def test_parse_gbff_extracts_expected_coordinates(tmp_path):
     gbff = tmp_path / "mock.gbff"
     _write_mock_gbff(gbff, contig="contig1", gene="geneA", start=10, end=20)
 
-    genes = gene_coverage.parse_gbff(
-        set(mock_bam.references),
-        str(gbff),
+    genes = gene_coverage._coverage_genes(
+        gene_coverage.iter_gbff_raw(str(gbff)),
         {"geneA"},
         "product",
         exact_match=True,
+        contig_names=set(mock_bam.references),
+        require_contig=True,
     )
 
     assert len(genes) == 1
@@ -74,18 +75,19 @@ def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
     bed = tmp_path / "mock.bed"
     bed.write_text("contig1\t10\t20\tgeneA\n")
 
-    from_gbff = gene_coverage.parse_gbff(
-        set(mock_bam.references),
-        str(gbff),
+    from_gbff = gene_coverage._coverage_genes(
+        gene_coverage.iter_gbff_raw(str(gbff)),
         {"geneA"},
         "product",
         exact_match=True,
+        contig_names=set(mock_bam.references),
+        require_contig=True,
     )
-    from_bed = gene_coverage.parse_bed(
-        set(mock_bam.references),
+    from_bed = gene_coverage.parse_bed_genes(
         str(bed),
         {"geneA"},
         exact_match=True,
+        contig_names=set(mock_bam.references),
     )
 
     assert from_gbff[0].cds == from_bed[0].cds == [(10, 20)]
@@ -125,12 +127,13 @@ def test_parse_gff_extracts_expected_coordinates(tmp_path):
         "##gff-version 3\n"
         "contig1\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
     )
-    genes = gene_coverage.parse_gff(
-        {"contig1"},
-        str(gff),
+    genes = gene_coverage._coverage_genes(
+        gene_coverage.iter_gff_raw(str(gff)),
         {"geneA"},
         "product",
         exact_match=True,
+        contig_names={"contig1"},
+        require_contig=True,
     )
     assert genes[0].cds == [(10, 20)]
 
@@ -145,11 +148,13 @@ def test_gff_and_bed_coordinates_agree_for_same_gene(tmp_path):
     bed = tmp_path / "mock.bed"
     bed.write_text("contig1\t10\t20\tgeneA\n")
 
-    from_gff = gene_coverage.parse_gff(
-        {"contig1"}, str(gff), {"geneA"}, "product", exact_match=True,
+    from_gff = gene_coverage._coverage_genes(
+        gene_coverage.iter_gff_raw(str(gff)),
+        {"geneA"}, "product", exact_match=True,
+        contig_names={"contig1"}, require_contig=True,
     )
-    from_bed = gene_coverage.parse_bed(
-        {"contig1"}, str(bed), {"geneA"}, exact_match=True,
+    from_bed = gene_coverage.parse_bed_genes(
+        str(bed), {"geneA"}, exact_match=True, contig_names={"contig1"},
     )
     assert from_gff[0].cds == from_bed[0].cds == [(10, 20)]
 
@@ -162,8 +167,10 @@ def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
         "contig1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;product=geneA\n"
         "contig1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;product=geneA\n"
     )
-    genes = gene_coverage.parse_gff(
-        {"contig1"}, str(gff), {"geneA"}, "product", exact_match=True,
+    genes = gene_coverage._coverage_genes(
+        gene_coverage.iter_gff_raw(str(gff)),
+        {"geneA"}, "product", exact_match=True,
+        contig_names={"contig1"}, require_contig=True,
     )
     assert genes[0].cds == [(0, 6), (10, 16)]
 
@@ -175,8 +182,10 @@ def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
         "otherContig\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
     )
     with pytest.raises(KeyError, match="otherContig not in BAM"):
-        gene_coverage.parse_gff(
-            {"contig1"}, str(gff), {"geneA"}, "product", exact_match=True,
+        gene_coverage._coverage_genes(
+            gene_coverage.iter_gff_raw(str(gff)),
+            {"geneA"}, "product", exact_match=True,
+            contig_names={"contig1"}, require_contig=True,
         )
 
 
@@ -184,7 +193,7 @@ def test_quantify_gene_coverage_known_depth_and_breadth():
     mock_bam = MockBam(
         references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
     )
-    genes = [Gene(gene_id="geneA", contig="contig1", parts=[(10, 20)])]
+    genes = [Gene(gene_id="geneA", contig="contig1", parts={"CDS": [(10, 20)]})]
 
     depth_dict, coverage_dict = gene_coverage.quantify_gene_coverage(
         mock_bam,
@@ -211,7 +220,7 @@ def test_quantify_gene_coverage_edge_guards_raise_clean_value_errors(
     mock_bam = MockBam(
         references=["contig1"], contig_lengths={"contig1": 10}, default_depth=5
     )
-    genes = [Gene(gene_id="geneA", contig=contig, parts=parts)]
+    genes = [Gene(gene_id="geneA", contig=contig, parts={"CDS": parts})]
 
     with pytest.raises(ValueError, match=re.escape(message_fragment)):
         gene_coverage.quantify_gene_coverage(

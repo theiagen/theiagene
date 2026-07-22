@@ -179,12 +179,12 @@ def test_iter_gff_features_marks_unresolved_strand_as_none(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_gene_span_and_positions_are_derived_from_parts():
-    plus = gene_model.Gene("g", "chr1", strand=1, parts=[(9, 12), (3, 6)])
+    plus = gene_model.Gene("g", "chr1", strand=1, parts={"CDS": [(9, 12), (3, 6)]})
     assert plus.genomic_start == 3
     assert plus.genomic_end == 12
     # translation order for a plus-strand gene is ascending across sorted parts
     assert plus.genomic_positions == [3, 4, 5, 9, 10, 11]
-    minus = gene_model.Gene("g", "chr1", strand=-1, parts=[(3, 6), (9, 12)])
+    minus = gene_model.Gene("g", "chr1", strand=-1, parts={"CDS": [(3, 6), (9, 12)]})
     # minus-strand translation order is reversed
     assert minus.genomic_positions == [11, 10, 9, 5, 4, 3]
 
@@ -200,10 +200,17 @@ def test_gene_add_part_appends():
     assert (gene.genomic_start, gene.genomic_end) == (3, 12)
 
 
+def test_gene_rejects_non_dict_parts():
+    # parts must be a {feature_type: [(start, end), ...]} dict; a bare list of
+    # segments is no longer accepted
+    with pytest.raises(TypeError, match="parts"):
+        gene_model.Gene("g", "chr1", parts=[(3, 6), (9, 12)])
+
+
 def test_genemodel_derives_four_sequences_including_introns():
     # two exons [3,6) + [9,12) flanking an intron [6,9); coding = ATG|TTT, intron CCC
     contig = "AAA" + "ATG" + "CCC" + "TTT" + "AAA"
-    model = gene_model.GeneModel("g", "c", strand=1, parts=[(3, 6), (9, 12)])
+    model = gene_model.GeneModel("g", "c", strand=1, parts={"CDS": [(3, 6), (9, 12)]})
     model.finalize(contig)
     assert model.ref_coding == "ATGTTT"          # spliced CDS (no intron)
     assert model.protein == "MF"
@@ -215,7 +222,7 @@ def test_genemodel_derives_four_sequences_including_introns():
 
 def test_genemodel_minus_strand_sequences_are_coding_oriented():
     contig = "AAA" + "ATG" + "CCC" + "TTT" + "AAA"
-    model = gene_model.GeneModel("g", "c", strand=-1, parts=[(3, 6), (9, 12)])
+    model = gene_model.GeneModel("g", "c", strand=-1, parts={"CDS": [(3, 6), (9, 12)]})
     model.finalize(contig)
     # dna is the full span on the coding (minus) strand; revcomp is the plus strand
     assert model.dna == sequence.reverse_complement("ATGCCCTTT")
@@ -227,7 +234,7 @@ def test_genemodel_from_gene_derives_model_when_cds_and_sequence_present():
     # a Gene carrying CDS coordinates and a contig sequence upgrades to a model
     contig = "AAA" + "ATG" + "CCC" + "TTT" + "AAA"
     gene = gene_model.Gene(
-        "g", "c", strand=1, parts=[(3, 6), (9, 12)], contig_seq=contig
+        "g", "c", strand=1, parts={"CDS": [(3, 6), (9, 12)]}, contig_seq=contig
     )
     model = gene_model.GeneModel.from_gene(gene)
     assert isinstance(model, gene_model.GeneModel)
@@ -245,7 +252,7 @@ def test_genemodel_from_gene_requires_cds_and_sequence():
     # CDS coordinates but no reference sequence -> cannot model
     with pytest.raises(ValueError, match="no reference sequence"):
         gene_model.GeneModel.from_gene(
-            gene_model.Gene("g", "c", strand=1, parts=[(0, 3)])
+            gene_model.Gene("g", "c", strand=1, parts={"CDS": [(0, 3)]})
         )
 
 
