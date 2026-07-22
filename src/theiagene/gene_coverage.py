@@ -11,9 +11,7 @@ import argparse
 
 import pysam
 
-# shared helpers, re-exported so callers (and tests) can reach them here
-from theiagene.lib.query import
-    extract_queries_from_bed,
+from theiagene.lib.query import extract_queries_from_bed
 from theiagene.lib.io_utils import write_json
 from theiagene.lib.gene_model import Gene
 from theiagene.lib.parsers import (

@@ -1,15 +1,10 @@
-"""Gene coordinate model (:class:`Gene`) and its sequence-bearing subclass.
+"""Gene coordinate model (:class:`Gene`) and its sequence-bearing subclass (:class:`GeneModel`).
 
-A :class:`Gene` is the shared coordinate currency of theiagene: it captures the
-metadata and genomic segments of one query gene, and optionally the reference
-sequence it sits on.  The coordinate parsers in ``theiagene.lib.parsers`` produce
-:class:`Gene` objects directly -- ``gene_coverage`` uses them as-is (it only
-needs coordinates), while ``variant_annotation`` upgrades each into the
-:class:`GeneModel` subclass via :meth:`GeneModel.from_gene`, which requires the
+A :class:`Gene` captures the metadata and genomic segments of one query gene, 
+and optionally its reference sequence. 
+:class:`GeneModel` subclass via :meth:`GeneModel.from_gene`, requires the
 gene's CDS coordinates plus a reference sequence and, from them, derives the
-coding sequence and four sequence attributes (:attr:`~GeneModel.protein`,
-:attr:`~GeneModel.rna`, :attr:`~GeneModel.dna` and
-:attr:`~GeneModel.revcomp_dna`)."""
+coding sequence and four sequence attributes."""
 
 from theiagene.lib.sequence import complement, reverse_complement, translate
 
@@ -66,8 +61,7 @@ class Gene:
         """Coordinate segments filed under ``feature_type`` (case-insensitive key
         match), or ``[]`` when the gene carries no part of that type.
 
-        ``gene_coverage`` selects which feature's coordinates drive breadth/depth
-        through this (e.g. ``"CDS"``, ``"exon"``, ``"gene"``); :attr:`cds` is the
+        (e.g. ``"CDS"``, ``"exon"``, ``"gene"``); :attr:`cds` is the
         ``"CDS"`` specialisation used when modelling coding sequence."""
         target = feature_type.lower()
         for key, segments in self.parts.items():
@@ -96,7 +90,7 @@ class Gene:
         return max((e for _, e in self.cds), default=None)
 
     @property
-    def genomic_positions(self):
+    def cds_positions(self):
         """Every coding-base genomic position in translation (5'->3') order"""
         positions = []
         for start, end in sorted(self.cds):
@@ -168,14 +162,14 @@ class GeneModel(Gene):
         if contig_seq is None:
             raise ValueError(f"cannot finalize '{self.gene_id}': no reference sequence")
         self.contig_seq = contig_seq
-        positions = self.genomic_positions
+        positions = self.cds_positions
         coding = "".join(contig_seq[p].upper() for p in positions)
         if self.strand == -1:
             # positions are already reversed; complement each base to get revcomp
             coding = complement(coding)
         self.ref_coding = coding
         self.pos2cds = {g: i for i, g in enumerate(positions)}
-        self.protein = translate(coding, self.transl_table)
+        self.protein = translate(self.ref_coding, self.transl_table)
         self.rna = coding.replace("T", "U")
         # full gene span including introns, on the coding strand
         span = contig_seq[self.genomic_start : self.genomic_end].upper()

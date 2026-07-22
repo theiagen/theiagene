@@ -43,6 +43,7 @@ import pysam
 # shared helpers, re-exported so callers (and tests) can reach them here
 from theiagene.lib.sequence import is_nucleotide_allele
 from theiagene.lib.query import ordered_query_genes
+from theiagene.lib.gene_model import GeneModel  # noqa: F401
 from theiagene.lib.parsers import (  # noqa: F401
     build_gene_models_gbff,
     build_gene_models_gff,

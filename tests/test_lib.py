@@ -183,10 +183,10 @@ def test_gene_span_and_positions_are_derived_from_parts():
     assert plus.genomic_start == 3
     assert plus.genomic_end == 12
     # translation order for a plus-strand gene is ascending across sorted parts
-    assert plus.genomic_positions == [3, 4, 5, 9, 10, 11]
+    assert plus.cds_positions == [3, 4, 5, 9, 10, 11]
     minus = gene_model.Gene("g", "chr1", strand=-1, parts={"CDS": [(3, 6), (9, 12)]})
     # minus-strand translation order is reversed
-    assert minus.genomic_positions == [11, 10, 9, 5, 4, 3]
+    assert minus.cds_positions == [11, 10, 9, 5, 4, 3]
 
 
 def test_gene_add_part_appends():

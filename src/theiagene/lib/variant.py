@@ -147,9 +147,9 @@ class Variant:
             ) not in model.pos2cds and changed_pos0 not in model.pos2cds:
                 return None  # insertion is not adjacent to any coding base
             if model.strand == 1:
-                cds_start = sum(1 for g in model.genomic_positions if g < changed_pos0)
+                cds_start = sum(1 for g in model.cds_positions if g < changed_pos0)
             else:
-                cds_start = sum(1 for g in model.genomic_positions if g >= changed_pos0)
+                cds_start = sum(1 for g in model.cds_positions if g >= changed_pos0)
             cds_end = cds_start
 
         first_codon = cds_start // 3 + 1
