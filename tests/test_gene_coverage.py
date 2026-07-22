@@ -175,6 +175,55 @@ def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
     assert genes[0].cds == [(0, 6), (10, 16)]
 
 
+def test_coverage_genes_selects_feature_type_from_parts(tmp_path):
+    # a gene whose exon and CDS spans differ: the feature_type option picks which
+    # coordinates are carried forward for coverage (default CDS, or e.g. exon)
+    gff = tmp_path / "hier.gff"
+    gff.write_text(
+        "##gff-version 3\n"
+        "contig1\t.\tgene\t1\t30\t.\t+\t.\tID=gene-A\n"
+        "contig1\t.\tmRNA\t1\t30\t.\t+\t.\tID=rna-A;Parent=gene-A;product=geneA\n"
+        "contig1\t.\texon\t1\t30\t.\t+\t.\tID=exon-A;Parent=rna-A\n"
+        "contig1\t.\tCDS\t5\t25\t.\t+\t0\tID=cds-A;Parent=rna-A;product=geneA\n"
+    )
+
+    def collect(feature_type):
+        return gene_coverage._coverage_genes(
+            gene_coverage.iter_gff_raw(str(gff)),
+            {"geneA"}, "product", exact_match=True,
+            contig_names={"contig1"}, require_contig=True,
+            feature_type=feature_type,
+        )
+
+    # exon: 1-based [1, 30] -> 0-based [0, 30); CDS: 1-based [5, 25] -> [4, 25)
+    exon_genes = collect("exon")
+    assert exon_genes[0].segments("exon") == [(0, 30)]
+    cds_genes = collect("CDS")
+    assert cds_genes[0].cds == [(4, 25)]
+    # a feature type the gene lacks yields no gene at all
+    assert collect("five_prime_UTR") == []
+
+
+def test_quantify_gene_coverage_uses_requested_feature_type():
+    mock_bam = MockBam(
+        references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
+    )
+    # coordinates live only under the "exon" key
+    genes = [Gene(gene_id="geneA", contig="contig1", parts={"exon": [(10, 20)]})]
+
+    depth_dict, coverage_dict = gene_coverage.quantify_gene_coverage(
+        mock_bam, genes, feature_type="exon", min_depth=1, min_quality=0,
+    )
+    assert depth_dict["geneA"] == 5.0
+    assert coverage_dict["geneA"] == 100.0
+
+    # the default (CDS) finds no coordinates on this gene and reports nothing
+    with pytest.raises(ValueError, match="No positions evaluated"):
+        gene_coverage.quantify_gene_coverage(
+            mock_bam, genes, min_depth=1, min_quality=0,
+        )
+
+
 def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
     gff = tmp_path / "mock.gff"
     gff.write_text(

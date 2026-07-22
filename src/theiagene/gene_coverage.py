@@ -3,8 +3,8 @@
 Given a BAM and query-gene coordinates (from a reference GBFF/GFF or a BED
 file), this command reports the average depth and percent coverage of each
 query gene as JSON (``DEPTH_DICT.json``, ``COVERAGE_DICT.json``) and a readable
-``COVERAGE_STATS.tsv``.  When a VCF is supplied, the gene-overlapping variants
-are additionally extracted to ``GENE_VARIANTS.vcf``.
+``COVERAGE_STATS.tsv``.  (Extraction of gene-overlapping variants from a VCF now
+lives in the ``variant_annotation`` command.)
 
 This is the ``gene_coverage`` subcommand of the ``theiagene`` entrypoint; it was
 formerly the standalone ``gene_coverage.py`` script (a
@@ -32,7 +32,6 @@ from theiagene.lib.parsers import (
     match_identifiers,
     resolve_contig,
     parse_bed_genes,
-    extract_vcf_genes,  # noqa: F401
 )
 from theiagene.lib.logging_config import configure_logging
 
@@ -57,12 +56,16 @@ def _coverage_genes(
     exact_match: bool,
     contig_names: set,
     require_contig: bool,
+    feature_type: str = "CDS",
 ) -> list:
     """Turn a Gene stream into a list of matched Gene objects.
 
     Matching is the coverage flavour (raw exact/substring on the single feature
-    qualifier); genes sharing a name on a contig accumulate their parts.  A parsed
-    gene carrying no CDS coordinates (e.g. a non-coding GFF gene) is skipped."""
+    qualifier); genes sharing a name on a contig accumulate their parts.  Only the
+    ``feature_type`` coordinates are carried forward (filed under that type so
+    :func:`quantify_gene_coverage` reads them back); a parsed gene carrying no
+    part of that type (e.g. a non-coding gene when ``feature_type='CDS'``) is
+    skipped."""
     qualifier = feature_qualifier.strip()
     genes = {}
     order = []
@@ -71,7 +74,8 @@ def _coverage_genes(
             raw.qualifiers, list(query_set), [qualifier],
             exact_match=exact_match, normalize=False,
         )
-        if matched is None or not raw.cds:
+        segments = raw.segments(feature_type)
+        if matched is None or not segments:
             continue
         contig = resolve_contig(raw.contig_candidates, contig_names, require_contig, "BAM")
         key = (contig, matched)
@@ -82,18 +86,22 @@ def _coverage_genes(
             order.append(key)
         else:
             logger.warning(f"{matched} recovered multiple times in {contig}")
-        for start, end in raw.cds:
-            gene.add_part(start, end)
+        for start, end in segments:
+            gene.add_part(start, end, feature=feature_type)
     return [genes[key] for key in order]
 
 
 def quantify_gene_coverage(
     imported_bam: pysam.AlignmentFile,
     genes: list,
+    feature_type: str = "CDS",
     min_depth: int = 1,
     min_quality: int = 0,
 ) -> tuple:
-    """Quantify gene breadth and depth of coverage over a list of Gene objects"""
+    """Quantify gene breadth and depth of coverage over a list of Gene objects.
+
+    Breadth/depth are compiled from each gene's ``feature_type`` coordinate
+    segments (parsed from its :attr:`~theiagene.lib.gene_model.Gene.parts`)."""
     depth_dict = {}
     coverage_dict = {}
     reference_names = set(imported_bam.references)
@@ -111,7 +119,7 @@ def quantify_gene_coverage(
         # check coverage data across range
         depths = []
         coverages = []
-        for start, end in gene.cds:
+        for start, end in gene.segments(feature_type):
             start, end = int(start), int(end)
             if end <= start:
                 raise ValueError(
@@ -165,12 +173,17 @@ def make_tsv(depth_dict: dict, coverage_dict: dict, ambiguous_contig: bool) -> s
 def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """Register the gene_coverage arguments on ``parser``"""
     parser.add_argument("--bam", required=True)
-    parser.add_argument("--vcf")
     parser.add_argument("--bedfile")
     parser.add_argument("--reference_gbff")
     parser.add_argument("--reference_gff")
     parser.add_argument("--query_genes", nargs="+")
     parser.add_argument("--feature_qualifier", default="product")
+    parser.add_argument(
+        "--feature_type",
+        default="CDS",
+        help="feature type whose coordinates drive the coverage calculation "
+        "(e.g. CDS, exon, gene); parsed from the reference GFF/GBFF (default: CDS)",
+    )
     parser.add_argument("--exact_match", action="store_true")
     parser.add_argument("--ambiguous_contig", action="store_true")
     parser.add_argument("--min_depth", type=int, default=1)
@@ -204,17 +217,18 @@ def run_cli(args: argparse.Namespace) -> int:
         genes = _coverage_genes(
             iter_gbff_raw(args.reference_gbff),
             query_set, args.feature_qualifier, args.exact_match,
-            contig_names, require_contig,
+            contig_names, require_contig, args.feature_type,
         )
     elif args.reference_gff:
         genes = _coverage_genes(
             iter_gff_raw(args.reference_gff),
             query_set, args.feature_qualifier, args.exact_match,
-            contig_names, require_contig,
+            contig_names, require_contig, args.feature_type,
         )
     if args.bedfile:
         genes += parse_bed_genes(
-            args.bedfile, query_set, args.exact_match, contig_names, require_contig
+            args.bedfile, query_set, args.exact_match, contig_names,
+            require_contig, feature_type=args.feature_type,
         )
 
     if args.ambiguous_contig:
@@ -223,15 +237,9 @@ def run_cli(args: argparse.Namespace) -> int:
         for gene in genes:
             gene.contig = contig
 
-    # optionally extract gene-overlapping variants from a VCF into a single VCF;
-    # the extraction routine lives in theiagene.lib.parsers (shared with the
-    # variant_annotation command) and is re-exported into this module
-    if args.vcf:
-        extract_vcf_genes(args.vcf, genes, "GENE_VARIANTS.vcf")
-
     # quantify statistics and write
     depth_dict, coverage_dict = quantify_gene_coverage(
-        imported_bam, genes, args.min_depth, args.min_quality
+        imported_bam, genes, args.feature_type, args.min_depth, args.min_quality
     )
     write_json("DEPTH_DICT.json", depth_dict)
     write_json("COVERAGE_DICT.json", coverage_dict)

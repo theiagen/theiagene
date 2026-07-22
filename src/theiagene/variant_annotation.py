@@ -6,10 +6,12 @@ reference GenBank (GBFF) that supplies the coding sequence, strand, product name
 and translation table for each gene, and a set of query genes, it reports the
 effect of every variant on the translated protein.
 
-Query genes are resolved for each variant from the VCF ``GENE`` INFO field when
-one is present (for example, a VCF pre-filtered by ``gene_coverage``) and
-otherwise by interval overlap against the coding models built from the GBFF, so
-it works equally on a pre-extracted or a raw VCF.
+Query genes are matched to each variant by interval overlap against the coding
+models built from the reference, so it works on a raw VCF.  The
+query-gene-overlapping variants are additionally written to a VCF
+(``GENE_VARIANTS.vcf`` by default; ``--gene_vcf``) with a ``GENE`` INFO field
+naming the overlapping gene(s) -- the extraction step formerly performed by
+``gene_coverage``.
 
 For each variant it determines whether a substitution is
 
@@ -40,23 +42,12 @@ from collections import defaultdict
 import pysam
 
 # shared helpers, re-exported so callers (and tests) can reach them here
-from theiagene.lib.sequence import (  # noqa: F401
-    is_nucleotide_allele,
-    aa3,
-    complement,
-    translate,
-)
-from theiagene.lib.query import (  # noqa: F401
-    normalize_name,
-    sanitize_info_value,
-    match_query,
-    ordered_query_genes,
-)
+from theiagene.lib.sequence import is_nucleotide_allele
+from theiagene.lib.query import ordered_query_genes
 from theiagene.lib.parsers import (  # noqa: F401
     build_gene_models_gbff,
     build_gene_models_gff,
     extract_vcf_genes,
-    flatten_coords_by_contig,
 )
 from theiagene.lib.logging_config import configure_logging
 
@@ -245,8 +236,13 @@ def run(
     exact_match: bool = False,
     transl_table: int = None,
     suppress_downstream_frameshift: bool = True,
+    gene_vcf: str = "GENE_VARIANTS.vcf",
 ) -> str:
-    """Annotate a VCF and return the report string"""
+    """Annotate a VCF and return the report string.
+
+    When ``gene_vcf`` is set (the default), the query-gene-overlapping variants
+    are also written there with a ``GENE`` INFO field naming the overlapping
+    gene(s) -- the extraction step formerly performed by ``gene_coverage``."""
     query_arg = query_genes if isinstance(query_genes, (list, tuple)) else [query_genes]
     ordered = ordered_query_genes(query_arg)
     # inefficiently reads VCF into memory
@@ -273,6 +269,12 @@ def run(
         )
     else:
         raise FileNotFoundError("GBFF or GFF and FASTA not provided")
+    # extract gene-overlapping variants to a VCF (offloaded from gene_coverage);
+    # a model is registered under many keys, so dedupe to the distinct models
+    if gene_vcf:
+        extract_vcf_genes(
+            vcffile, list(dict.fromkeys(models_by_key.values())), gene_vcf
+        )
     annotations = annotate_vcf(
         vcf, models_by_key, suppress_downstream_frameshift=suppress_downstream_frameshift
     )
@@ -310,6 +312,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "suppressed because a frameshift invalidates every downstream codon)",
     )
     parser.add_argument("--output", default="VARIANT_ANNOTATIONS.txt")
+    parser.add_argument(
+        "--gene_vcf",
+        default="GENE_VARIANTS.vcf",
+        help="write query-gene-overlapping variants (with a GENE INFO field) to "
+        "this VCF (default: GENE_VARIANTS.vcf)",
+    )
     return parser
 
 
@@ -332,6 +340,7 @@ def run_cli(args: argparse.Namespace) -> int:
         exact_match=args.exact_match,
         transl_table=args.transl_table,
         suppress_downstream_frameshift=not args.annotate_downstream_of_frameshift,
+        gene_vcf=args.gene_vcf,
     )
     with open(args.output, "w") as out:
         out.write(report + "\n")

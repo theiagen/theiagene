@@ -14,10 +14,6 @@ coding sequence and four sequence attributes (:attr:`~GeneModel.protein`,
 from theiagene.lib.sequence import complement, reverse_complement, translate
 
 
-# attribute keys under which CDS coordinate segments are filed (case variants)
-CDS_KEYS = ("CDS", "cds")
-
-
 class Gene:
     """Coordinates and metadata for a single query gene.
 
@@ -66,13 +62,23 @@ class Gene:
             else ([contig] if contig is not None else [])
         )
 
+    def segments(self, feature_type: str) -> list:
+        """Coordinate segments filed under ``feature_type`` (case-insensitive key
+        match), or ``[]`` when the gene carries no part of that type.
+
+        ``gene_coverage`` selects which feature's coordinates drive breadth/depth
+        through this (e.g. ``"CDS"``, ``"exon"``, ``"gene"``); :attr:`cds` is the
+        ``"CDS"`` specialisation used when modelling coding sequence."""
+        target = feature_type.lower()
+        for key, segments in self.parts.items():
+            if key.lower() == target:
+                return segments
+        return []
+
     @property
     def cds(self) -> list:
         """CDS coordinate segments (case-insensitive key lookup); ``[]`` if none"""
-        for key in CDS_KEYS:
-            if key in self.parts:
-                return self.parts[key]
-        return []
+        return self.segments("CDS")
 
     def add_part(self, start, end, feature: str = "CDS") -> None:
         """Append a genomic ``(start, end)`` segment (0-based, half-open) under

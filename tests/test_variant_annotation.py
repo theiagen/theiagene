@@ -157,11 +157,11 @@ def gff_fa(tmp_path):
 
 
 def _annotate(gbff, vcf, query=("test gene alpha",), exact=True):
-    return va.run(vcf, gbff, None, None, list(query), exact_match=exact)
+    return va.run(vcf, gbff, None, None, list(query), exact_match=exact, gene_vcf=None)
 
 
 def _annotate_gff(gff, fa, vcf, query=("test gene alpha",), exact=True):
-    return va.run(vcf, None, gff, fa, list(query), exact_match=exact)
+    return va.run(vcf, None, gff, fa, list(query), exact_match=exact, gene_vcf=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -331,6 +331,7 @@ def test_annotate_downstream_of_frameshift_flag_keeps_downstream(gbff, tmp_path)
         ["test gene alpha"],
         exact_match=True,
         suppress_downstream_frameshift=False,
+        gene_vcf=None,
     )
     assert "frameshift_variant c.13delG p.Gly5fs" in report
     assert "missense_variant c.17T>C p.Phe6Ser" in report
@@ -382,6 +383,7 @@ def test_transl_table_override_changes_call(gbff, tmp_path):
         ["test gene alpha"],
         exact_match=True,
         transl_table=1,
+        gene_vcf=None,
     )
     assert "missense_variant c.5A>T p.Tyr2Phe" in report
 
@@ -426,7 +428,7 @@ def test_no_variants_message_lists_query_genes(gbff, tmp_path):
         "FKS1,lanosterol.14-alpha.demethylase,uracil.phosphoribosyltransferase",
         "B9J08_005340",
     ]
-    report = va.run(str(vcf), gbff, None, None, query, exact_match=True)
+    report = va.run(str(vcf), gbff, None, None, query, exact_match=True, gene_vcf=None)
     assert report == (
         "No variants identified in queried genes "
         "(FKS1,lanosterol.14-alpha.demethylase,uracil.phosphoribosyltransferase,"
@@ -513,7 +515,7 @@ def test_inframe_insertion_after_stop_is_not_stop_gained(tmp_path):
     vcf = tmp_path / "v.vcf"
     # insert TTT immediately 3' of the terminal stop (gene [5,23), last base genomic 22)
     _write_vcf(vcf, "chrgz", 30, [(23, "A", "ATTT")])
-    report = va.run(str(vcf), str(gbff), None, None, ["gz"], exact_match=True)
+    report = va.run(str(vcf), str(gbff), None, None, ["gz"], exact_match=True, gene_vcf=None)
     assert "stop_gained" not in report
     assert "Xaa" not in report
     assert "stop_retained_variant" in report
@@ -649,3 +651,38 @@ def test_extract_vcf_genes_indexing_is_zero_based_half_open(tmp_path):
     # POS 11 (first base) and POS 20 (last base) fall within [10, 20).
     assert written == 2
     assert kept == [(11, ("geneA",)), (20, ("geneA",))]
+
+
+def test_run_writes_gene_variants_vcf(gbff, tmp_path):
+    # the extraction step offloaded from gene_coverage: run() also writes the
+    # gene-overlapping variants to the --gene_vcf path with a GENE INFO field
+    import pysam
+
+    # alpha CDS is genomic [9, 33): POS 14 overlaps, POS 5 does not
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chr1", 40, [(5, "A", "T"), (14, "A", "T")])
+    gene_vcf = tmp_path / "genes.vcf"
+
+    va.run(
+        str(vcf), gbff, None, None, ["test gene alpha"],
+        exact_match=True, gene_vcf=str(gene_vcf),
+    )
+
+    assert gene_vcf.exists()
+    with pysam.VariantFile(str(gene_vcf)) as handle:
+        assert "GENE" in handle.header.info
+        kept = [(rec.pos, tuple(rec.info["GENE"])) for rec in handle]
+    # only the overlapping variant is written, tagged with the query gene
+    assert kept == [(14, ("test.gene.alpha",))]
+
+
+def test_run_gene_vcf_none_writes_no_file(gbff, tmp_path, monkeypatch):
+    # gene_vcf=None disables extraction (used by the annotation-only helpers)
+    monkeypatch.chdir(tmp_path)
+    vcf = tmp_path / "v.vcf"
+    _write_vcf(vcf, "chr1", 40, [(14, "A", "T")])
+
+    va.run(str(vcf), gbff, None, None, ["test gene alpha"],
+           exact_match=True, gene_vcf=None)
+
+    assert not (tmp_path / "GENE_VARIANTS.vcf").exists()

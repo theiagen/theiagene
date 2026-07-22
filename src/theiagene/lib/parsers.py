@@ -284,11 +284,14 @@ def parse_bed_genes(
     contig_names,
     require: bool = True,
     source_label: str = "BAM",
+    feature_type: str = "CDS",
 ) -> list:
     """Parse a BED file into :class:`Gene` objects (coverage-only format).
 
     Rows sharing a name on the same contig accumulate as multiple parts, matching
-    the multi-segment handling of the GBFF/GFF parsers."""
+    the multi-segment handling of the GBFF/GFF parsers.  A BED file carries no
+    feature type of its own, so its regions are filed under ``feature_type`` (the
+    type the coverage caller quantifies) so they are read back consistently."""
     query_set = set(query_list)
     check = exact_check if exact_match else substring_check
     genes = {}
@@ -311,7 +314,7 @@ def parse_bed_genes(
                 gene = Gene(gene_id=name, contig=contig)
                 genes[key] = gene
                 order.append(key)
-            gene.add_part(int(data[1]), int(data[2]))
+            gene.add_part(int(data[1]), int(data[2]), feature=feature_type)
     return [genes[key] for key in order]
 
 
@@ -458,7 +461,7 @@ def flatten_coords_by_contig(genes, full_range: bool = False) -> dict:
     """Flatten Gene objects to {<CONTIG>: [(START, END, GENE_ID), ...]} for interval
     overlap testing.  If full_range is True, each gene is collapsed to a single
     (genomic_start, genomic_end) range spanning all of its parts; otherwise every
-    part is emitted separately"""
+    CDS part is emitted separately"""
     contig2ranges = defaultdict(list)
     for gene in genes:
         if full_range:
