@@ -1,17 +1,16 @@
 """Annotate the protein-level consequences of variants that overlap query genes.
 
 This is the ``variant_annotation`` subcommand of the ``theiagene`` entrypoint
-(formerly the standalone ``variant_annotation.py`` script).  Given a VCF, a
-reference GenBank (GBFF) that supplies the coding sequence, strand, product name
-and translation table for each gene, and a set of query genes, it reports the
-effect of every variant on the translated protein.
+(formerly the standalone ``variant_annotation.py`` script). It reports the
+effect of every variant on the translated protein, given a VCF, a
+reference GBFF/GFF + FA that supplies the gene coordinates and coding sequence, strand, product name
+and translation table for each gene, and a set of query genes. 
 
 Query genes are matched to each variant by interval overlap against the coding
-models built from the reference, so it works on a raw VCF.  The
+models built from the reference. The
 query-gene-overlapping variants are additionally written to a VCF
 (``GENE_VARIANTS.vcf`` by default; ``--gene_vcf``) with a ``GENE`` INFO field
-naming the overlapping gene(s) -- the extraction step formerly performed by
-``gene_coverage``.
+naming the overlapping gene(s).
 
 For each variant it determines whether a substitution is
 
@@ -50,9 +49,6 @@ from theiagene.lib.parsers import (  # noqa: F401
     extract_vcf_genes,
 )
 from theiagene.lib.logging_config import configure_logging
-
-# domain classes, now living in lib; re-exported so callers/tests reach them here
-from theiagene.lib.gene_model import GeneModel  # noqa: F401
 from theiagene.lib.variant import Variant
 
 
@@ -242,7 +238,7 @@ def run(
 
     When ``gene_vcf`` is set (the default), the query-gene-overlapping variants
     are also written there with a ``GENE`` INFO field naming the overlapping
-    gene(s) -- the extraction step formerly performed by ``gene_coverage``."""
+    gene(s)"""
     query_arg = query_genes if isinstance(query_genes, (list, tuple)) else [query_genes]
     ordered = ordered_query_genes(query_arg)
     # inefficiently reads VCF into memory
@@ -352,7 +348,7 @@ def main(argv=None) -> int:
     """Standalone entrypoint (``python -m theiagene.variant_annotation``)"""
     parser = argparse.ArgumentParser(
         description="Annotate protein-level consequences of gene-overlapping variants "
-        "(task_gene_coverage.wdl dependency; github.com/theiagen/public_health_bioinformatics)"
+        "(task_variant_annotate.wdl dependency; github.com/theiagen/public_health_bioinformatics)"
     )
     add_arguments(parser)
     args = parser.parse_args(argv)
