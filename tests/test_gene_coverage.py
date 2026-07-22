@@ -54,14 +54,13 @@ def test_parse_gbff_extracts_expected_coordinates(tmp_path):
         set(mock_bam.references),
         str(gbff),
         {"geneA"},
-        "CDS",
         "product",
         exact_match=True,
     )
 
     assert len(genes) == 1
     assert (genes[0].contig, genes[0].gene_id) == ("contig1", "geneA")
-    assert genes[0].parts == [(10, 20)]
+    assert genes[0].cds == [(10, 20)]
 
 
 def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
@@ -79,7 +78,6 @@ def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
         set(mock_bam.references),
         str(gbff),
         {"geneA"},
-        "CDS",
         "product",
         exact_match=True,
     )
@@ -90,7 +88,7 @@ def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
         exact_match=True,
     )
 
-    assert from_gbff[0].parts == from_bed[0].parts == [(10, 20)]
+    assert from_gbff[0].cds == from_bed[0].cds == [(10, 20)]
 
 
 class _Args:
@@ -131,11 +129,10 @@ def test_parse_gff_extracts_expected_coordinates(tmp_path):
         {"contig1"},
         str(gff),
         {"geneA"},
-        "CDS",
         "product",
         exact_match=True,
     )
-    assert genes[0].parts == [(10, 20)]
+    assert genes[0].cds == [(10, 20)]
 
 
 def test_gff_and_bed_coordinates_agree_for_same_gene(tmp_path):
@@ -149,12 +146,12 @@ def test_gff_and_bed_coordinates_agree_for_same_gene(tmp_path):
     bed.write_text("contig1\t10\t20\tgeneA\n")
 
     from_gff = gene_coverage.parse_gff(
-        {"contig1"}, str(gff), {"geneA"}, "CDS", "product", exact_match=True,
+        {"contig1"}, str(gff), {"geneA"}, "product", exact_match=True,
     )
     from_bed = gene_coverage.parse_bed(
         {"contig1"}, str(bed), {"geneA"}, exact_match=True,
     )
-    assert from_gff[0].parts == from_bed[0].parts == [(10, 20)]
+    assert from_gff[0].cds == from_bed[0].cds == [(10, 20)]
 
 
 def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
@@ -166,9 +163,9 @@ def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
         "contig1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;product=geneA\n"
     )
     genes = gene_coverage.parse_gff(
-        {"contig1"}, str(gff), {"geneA"}, "CDS", "product", exact_match=True,
+        {"contig1"}, str(gff), {"geneA"}, "product", exact_match=True,
     )
-    assert genes[0].parts == [(0, 6), (10, 16)]
+    assert genes[0].cds == [(0, 6), (10, 16)]
 
 
 def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
@@ -179,7 +176,7 @@ def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
     )
     with pytest.raises(KeyError, match="otherContig not in BAM"):
         gene_coverage.parse_gff(
-            {"contig1"}, str(gff), {"geneA"}, "CDS", "product", exact_match=True,
+            {"contig1"}, str(gff), {"geneA"}, "product", exact_match=True,
         )
 
 

@@ -57,10 +57,11 @@ def _coverage_genes(
     contig_names: set,
     require_contig: bool,
 ) -> list:
-    """Turn a RawGene stream into a list of matched Gene objects.
+    """Turn a Gene stream into a list of matched Gene objects.
 
     Matching is the coverage flavour (raw exact/substring on the single feature
-    qualifier); genes sharing a name on a contig accumulate their parts."""
+    qualifier); genes sharing a name on a contig accumulate their parts.  A parsed
+    gene carrying no CDS coordinates (e.g. a non-coding GFF gene) is skipped."""
     qualifier = feature_qualifier.strip()
     genes = {}
     order = []
@@ -69,7 +70,7 @@ def _coverage_genes(
             raw.qualifiers, list(query_set), [qualifier],
             exact_match=exact_match, normalize=False,
         )
-        if matched is None:
+        if matched is None or not raw.cds:
             continue
         contig = resolve_contig(raw.contig_candidates, contig_names, require_contig, "BAM")
         key = (contig, matched)
@@ -80,7 +81,7 @@ def _coverage_genes(
             order.append(key)
         else:
             logger.warning(f"{matched} recovered multiple times in {contig}")
-        for start, end in raw.parts:
+        for start, end in raw.cds:
             gene.add_part(start, end)
     return [genes[key] for key in order]
 
@@ -89,17 +90,17 @@ def parse_gff(
     contig_names: set,
     reference_gff: str,
     query_set: set,
-    feature_type: str,
     feature_qualifier: str,
     exact_match: bool = False,
     require_contig: bool = True,
 ) -> list:
     """Parse a GFF into a list of Gene objects (coordinates only).
 
-    Multi-exon CDS lines are coalesced into a single Gene carrying every segment,
-    exactly as ``parse_bed`` accumulates multiple BED rows."""
+    A gene's CDS segments are assimilated through the GFF3 parent/child hierarchy
+    into a single Gene carrying every segment, akin to how ``parse_bed``
+    accumulates multiple BED rows for one gene."""
     return _coverage_genes(
-        iter_gff_raw(reference_gff, feature_type),
+        iter_gff_raw(reference_gff),
         query_set, feature_qualifier, exact_match, contig_names, require_contig,
     )
 
@@ -108,14 +109,13 @@ def parse_gbff(
     contig_names: set,
     reference_gbff: str,
     query_set: set,
-    feature_type: str,
     feature_qualifier: str,
     exact_match: bool = False,
     require_contig: bool = True,
 ) -> list:
     """Parse a GBFF into a list of Gene objects (coordinates only)"""
     return _coverage_genes(
-        iter_gbff_raw(reference_gbff, feature_type),
+        iter_gbff_raw(reference_gbff),
         query_set, feature_qualifier, exact_match, contig_names, require_contig,
     )
 
@@ -178,7 +178,7 @@ def quantify_gene_coverage(
         # check coverage data across range
         depths = []
         coverages = []
-        for start, end in gene.parts:
+        for start, end in gene.cds:
             start, end = int(start), int(end)
             if end <= start:
                 raise ValueError(
@@ -237,7 +237,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--reference_gbff")
     parser.add_argument("--reference_gff")
     parser.add_argument("--query_genes", nargs="+")
-    parser.add_argument("--feature_type", default="CDS")
     parser.add_argument("--feature_qualifier", default="product")
     parser.add_argument("--exact_match", action="store_true")
     parser.add_argument("--ambiguous_contig", action="store_true")
@@ -273,7 +272,6 @@ def run_cli(args: argparse.Namespace) -> int:
             contig_names,
             args.reference_gbff,
             query_set,
-            args.feature_type,
             args.feature_qualifier,
             args.exact_match,
             require_contig,
@@ -283,7 +281,6 @@ def run_cli(args: argparse.Namespace) -> int:
             contig_names,
             args.reference_gff,
             query_set,
-            args.feature_type,
             args.feature_qualifier,
             args.exact_match,
             require_contig,

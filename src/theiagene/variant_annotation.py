@@ -93,7 +93,7 @@ def _register_model(models_by_key: dict, model: GeneModel, key_sources) -> None:
 
 
 def _assemble_model(raw, contig, matched_query, feature_qualifier, transl_table_override):
-    """Build and finalize a GeneModel from a matched RawGene.
+    """Resolve a matched Gene's identity and generate its GeneModel.
     Returns (model, gene_id, product)"""
     qualifier = feature_qualifier.strip()
     if transl_table_override is not None:
@@ -103,15 +103,13 @@ def _assemble_model(raw, contig, matched_query, feature_qualifier, transl_table_
     product_vals = raw.qualifiers.get(qualifier)
     product = product_vals[0] if product_vals else matched_query
     gene_id = normalize_name(matched_query)
-    model = GeneModel(
-        gene_id=gene_id,
-        product=product,
-        contig=contig,
-        strand=raw.strand,
-        transl_table=transl_table,
-        parts=raw.parts,
-    )
-    model.finalize(raw.contig_seq)
+    # stamp the resolved identity onto the parsed Gene, then let the GeneModel
+    # derive itself from it (it carries the CDS coordinates and reference sequence)
+    raw.gene_id = gene_id
+    raw.product = product
+    raw.contig = contig
+    raw.transl_table = transl_table
+    model = GeneModel.from_gene(raw)
     return model, gene_id, product
 
 
@@ -119,7 +117,6 @@ def build_gene_models_gbff(
     reference_gbff: str,
     contig_names: set,
     query_genes,
-    feature_type: str,
     feature_qualifier: str,
     exact_match: bool = False,
     transl_table_override: int = None,
@@ -134,7 +131,7 @@ def build_gene_models_gbff(
     query_list = list(query_genes)
     id_qualifiers = _id_qualifiers(feature_qualifier)
     models_by_key = {}
-    for raw in iter_gbff_raw(reference_gbff, feature_type):
+    for raw in iter_gbff_raw(reference_gbff):
         matched_query, identifiers = match_identifiers(
             raw.qualifiers, query_list, id_qualifiers,
             exact_match=exact_match, normalize=True,
@@ -145,6 +142,9 @@ def build_gene_models_gbff(
             logger.warning(
                 f"Skipping '{matched_query}': unresolved strand ({raw.strand})"
             )
+            continue
+        if not raw.cds:
+            logger.warning(f"Skipping '{matched_query}': no CDS coordinates to model")
             continue
         contig = resolve_contig(raw.contig_candidates, contig_names, True, "VCF")
         model, gene_id, product = _assemble_model(
@@ -161,7 +161,6 @@ def build_gene_models_gff(
     reference_fa: str,
     contig_names: set,
     query_genes,
-    feature_type: str,
     feature_qualifier: str,
     exact_match: bool = False,
     transl_table_override: int = None,
@@ -170,11 +169,12 @@ def build_gene_models_gff(
 
     A CDS is matched by the ``feature_qualifier`` value plus its ``gene``,
     ``locus_tag`` and ``protein_id`` attributes, so query sets may mix product
-    names and locus tags.  Multi-exon CDS lines are grouped (by ``ID``/``Parent``)
-    and assembled in translation order into a single coding model, mirroring the
-    GBFF backend.  A model is registered under many lookup keys (raw, sanitized
-    and normalized forms of every identifier) so it can be recovered from
-    whatever identifier the VCF ``GENE`` field carries.
+    names and locus tags.  Multi-exon CDS are assimilated through the GFF3
+    parent/child hierarchy (``CDS -> RNA -> gene``) and assembled in translation
+    order into a single coding model, mirroring the GBFF backend.  A model is
+    registered under many lookup keys (raw, sanitized and normalized forms of
+    every identifier) so it can be recovered from whatever identifier the VCF
+    ``GENE`` field carries.
 
     The coding phase column is not applied; as with the GBFF backend, each CDS
     is assumed to begin on a codon boundary."""
@@ -182,7 +182,7 @@ def build_gene_models_gff(
     id_qualifiers = _id_qualifiers(feature_qualifier)
     fa_dict = SeqIO.to_dict(SeqIO.parse(reference_fa, "fasta"))
     models_by_key = {}
-    for raw in iter_gff_raw(reference_gff, feature_type, fa_dict):
+    for raw in iter_gff_raw(reference_gff, fa_dict):
         matched_query, identifiers = match_identifiers(
             raw.qualifiers, query_list, id_qualifiers,
             exact_match=exact_match, normalize=True,
@@ -193,6 +193,9 @@ def build_gene_models_gff(
             logger.warning(
                 f"Skipping '{matched_query}': unresolved strand ({raw.strand})"
             )
+            continue
+        if not raw.cds:
+            logger.warning(f"Skipping '{matched_query}': no CDS coordinates to model")
             continue
         # check appropriate contig is used for the VCF and available in the FASTA
         contig = resolve_contig(raw.contig_candidates, contig_names, True, "VCF")
@@ -380,7 +383,6 @@ def run(
     reference_gff: str,
     reference_fa: str,
     query_genes,
-    feature_type: str = "CDS",
     feature_qualifier: str = "product",
     exact_match: bool = False,
     transl_table: int = None,
@@ -397,7 +399,6 @@ def run(
             reference_gbff,
             contig_names,
             ordered,
-            feature_type,
             feature_qualifier,
             exact_match=exact_match,
             transl_table_override=transl_table,
@@ -408,7 +409,6 @@ def run(
             reference_fa,
             contig_names,
             ordered,
-            feature_type,
             feature_qualifier,
             exact_match=exact_match,
             transl_table_override=transl_table,
@@ -437,7 +437,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         help="reference genome FASTA"
     )
     parser.add_argument("--query_genes", nargs="+", required=True)
-    parser.add_argument("--feature_type", default="CDS")
     parser.add_argument("--feature_qualifier", default="product")
     parser.add_argument("--exact_match", action="store_true")
     parser.add_argument(
@@ -471,7 +470,6 @@ def run_cli(args: argparse.Namespace) -> int:
         args.reference_gff,
         args.reference_fa,
         args.query_genes,
-        feature_type=args.feature_type,
         feature_qualifier=args.feature_qualifier,
         exact_match=args.exact_match,
         transl_table=args.transl_table,

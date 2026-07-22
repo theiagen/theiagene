@@ -194,7 +194,9 @@ def test_gene_add_part_appends():
     assert gene.genomic_start is None
     gene.add_part(3, 6)
     gene.add_part(9, 12)
-    assert gene.parts == [(3, 6), (9, 12)]
+    # parts is a type-keyed dict; CDS segments are reached via the cds property
+    assert gene.parts == {"CDS": [(3, 6), (9, 12)]}
+    assert gene.cds == [(3, 6), (9, 12)]
     assert (gene.genomic_start, gene.genomic_end) == (3, 12)
 
 
@@ -221,8 +223,34 @@ def test_genemodel_minus_strand_sequences_are_coding_oriented():
     assert model.ref_coding == sequence.reverse_complement("ATGTTT")
 
 
+def test_genemodel_from_gene_derives_model_when_cds_and_sequence_present():
+    # a Gene carrying CDS coordinates and a contig sequence upgrades to a model
+    contig = "AAA" + "ATG" + "CCC" + "TTT" + "AAA"
+    gene = gene_model.Gene(
+        "g", "c", strand=1, parts=[(3, 6), (9, 12)], contig_seq=contig
+    )
+    model = gene_model.GeneModel.from_gene(gene)
+    assert isinstance(model, gene_model.GeneModel)
+    assert model.ref_coding == "ATGTTT" and model.protein == "MF"
+    # identity and coordinates are carried over from the Gene
+    assert model.gene_id == "g" and model.cds == [(3, 6), (9, 12)]
+
+
+def test_genemodel_from_gene_requires_cds_and_sequence():
+    # a sequence but no CDS coordinates -> cannot model
+    with pytest.raises(ValueError, match="no CDS coordinates"):
+        gene_model.GeneModel.from_gene(
+            gene_model.Gene("g", "c", strand=1, contig_seq="ACGT")
+        )
+    # CDS coordinates but no reference sequence -> cannot model
+    with pytest.raises(ValueError, match="no reference sequence"):
+        gene_model.GeneModel.from_gene(
+            gene_model.Gene("g", "c", strand=1, parts=[(0, 3)])
+        )
+
+
 # --------------------------------------------------------------------------- #
-# theiagene.lib.parsers -- RawGene streams, matching, BED
+# theiagene.lib.parsers -- Gene streams, matching, BED
 # --------------------------------------------------------------------------- #
 
 def test_match_identifiers_normalize_is_query_aware():
@@ -258,16 +286,72 @@ def test_resolve_contig_prefers_membership_and_falls_back():
         parsers.resolve_contig(["a", "b"], {"z"}, True, "VCF")
 
 
-def test_iter_gff_raw_coalesces_multi_exon_cds(tmp_path):
+def test_iter_gff_raw_assimilates_cds_through_rna_to_gene(tmp_path):
+    # gene -> mRNA -> two CDS segments: the CDS Parent points at the mRNA whose
+    # Parent points at the gene, so both segments assimilate onto the one gene
+    path = tmp_path / "hier.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "chr1\t.\tgene\t1\t16\t.\t+\t.\tID=gene-A;gene=ERG11;locus_tag=LT_1\n"
+        "chr1\t.\tmRNA\t1\t16\t.\t+\t.\tID=rna-A;Parent=gene-A\n"
+        "chr1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;Parent=rna-A;product=demethylase\n"
+        "chr1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;Parent=rna-A;product=demethylase\n"
+    )
+    raws = list(parsers.iter_gff_raw(str(path)))
+    assert len(raws) == 1
+    raw = raws[0]
+    assert raw.cds == [(0, 6), (10, 16)]
+    # product is taken from the CDS; gene/locus_tag come from the gene line
+    assert raw.qualifiers["product"] == ["demethylase"]
+    assert raw.qualifiers["gene"] == ["ERG11"]
+    assert raw.qualifiers["locus_tag"] == ["LT_1"]
+    assert raw.strand == 1
+    assert raw.contig_seq is None                      # no FASTA supplied
+
+
+def test_iter_gff_raw_assimilates_cds_with_direct_gene_parent(tmp_path):
+    # a CDS may hang directly off the gene, with no intervening RNA feature
+    path = tmp_path / "direct.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "chr1\t.\tgene\t1\t6\t.\t-\t.\tID=gene-B;gene=FKS1\n"
+        "chr1\t.\tCDS\t1\t6\t.\t-\t0\tID=cds-B;Parent=gene-B;product=glucan synthase\n"
+    )
+    raws = list(parsers.iter_gff_raw(str(path)))
+    assert len(raws) == 1
+    assert raws[0].cds == [(0, 6)]
+    assert raws[0].qualifiers["gene"] == ["FKS1"]
+    assert raws[0].strand == -1
+
+
+def test_iter_gff_raw_keeps_distinct_genes_separate(tmp_path):
+    # two genes on one contig each resolve to their own Gene via the parent
+    # chain rather than being merged together
+    path = tmp_path / "two.gff"
+    path.write_text(
+        "##gff-version 3\n"
+        "chr1\t.\tgene\t1\t6\t.\t+\t.\tID=gene-A\n"
+        "chr1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;Parent=gene-A;product=A\n"
+        "chr1\t.\tgene\t11\t16\t.\t+\t.\tID=gene-B\n"
+        "chr1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-B;Parent=gene-B;product=B\n"
+    )
+    raws = list(parsers.iter_gff_raw(str(path)))
+    assert len(raws) == 2
+    assert {tuple(r.cds) for r in raws} == {((0, 6),), ((10, 16),)}
+
+
+def test_iter_gff_raw_geneless_cds_falls_back_to_shared_id(tmp_path):
+    # a gene-less GFF (bare multi-segment CDS sharing one ID) still coalesces on
+    # that root ID, so minimal GFFs keep working
     path = tmp_path / "multi.gff"
     path.write_text(
         "##gff-version 3\n"
         "chr1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;product=geneA\n"
         "chr1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;product=geneA\n"
     )
-    raws = list(parsers.iter_gff_raw(str(path), "CDS"))
+    raws = list(parsers.iter_gff_raw(str(path)))
     assert len(raws) == 1
-    assert raws[0].parts == [(0, 6), (10, 16)]
+    assert raws[0].cds == [(0, 6), (10, 16)]
     assert raws[0].qualifiers["product"] == ["geneA"]  # accumulated as a list
     assert raws[0].contig_seq is None                  # no FASTA supplied
 
@@ -277,5 +361,5 @@ def test_parse_bed_genes_coalesces_rows_by_name(tmp_path):
     bed.write_text("chr1\t0\t6\tgeneA\nchr1\t10\t16\tgeneA\nchr1\t0\t3\tgeneB\n")
     genes = parsers.parse_bed_genes(str(bed), ["geneA", "geneB"], True, {"chr1"})
     by_id = {g.gene_id: g for g in genes}
-    assert by_id["geneA"].parts == [(0, 6), (10, 16)]
-    assert by_id["geneB"].parts == [(0, 3)]
+    assert by_id["geneA"].cds == [(0, 6), (10, 16)]
+    assert by_id["geneB"].cds == [(0, 3)]

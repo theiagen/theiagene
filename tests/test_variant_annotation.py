@@ -116,18 +116,26 @@ def _make_gff_and_fa(gff_path, fa_path):
     with open(fa_path, "w") as handle:
         SeqIO.write(records, handle, "fasta")
 
-    # GFF is 1-based, both-inclusive: 0-based [s, e) -> columns (s + 1, e)
+    # GFF is 1-based, both-inclusive: 0-based [s, e) -> columns (s + 1, e).
+    # Each gene is a proper gene -> mRNA -> CDS hierarchy: the CDS assimilate onto
+    # the gene by walking their Parent chain (CDS -> mRNA -> gene).
     lines = [
         "##gff-version 3",
         "# comment lines and blank lines must be tolerated",
         "",
         # chr1 alpha forward: genomic [9, 33)
-        "chr1\t.\tCDS\t10\t33\t.\t+\t0\tID=cds-alpha;product=test gene alpha",
+        "chr1\t.\tgene\t10\t33\t.\t+\t.\tID=gene-alpha;gene=alpha",
+        "chr1\t.\tmRNA\t10\t33\t.\t+\t.\tID=rna-alpha;Parent=gene-alpha",
+        "chr1\t.\tCDS\t10\t33\t.\t+\t0\tID=cds-alpha;Parent=rna-alpha;product=test gene alpha",
         # chr2 beta reverse: genomic [5, 17)
-        "chr2\t.\tCDS\t6\t17\t.\t-\t0\tID=cds-beta;product=test gene beta",
-        # chr3 gamma two-exon forward: [0, 6) and [10, 16), sharing one CDS ID
-        "chr3\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-gamma;product=test gene gamma",
-        "chr3\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-gamma;product=test gene gamma",
+        "chr2\t.\tgene\t6\t17\t.\t-\t.\tID=gene-beta;gene=beta",
+        "chr2\t.\tmRNA\t6\t17\t.\t-\t.\tID=rna-beta;Parent=gene-beta",
+        "chr2\t.\tCDS\t6\t17\t.\t-\t0\tID=cds-beta;Parent=rna-beta;product=test gene beta",
+        # chr3 gamma two-exon forward: [0, 6) and [10, 16), both CDS under one mRNA
+        "chr3\t.\tgene\t1\t16\t.\t+\t.\tID=gene-gamma;gene=gamma",
+        "chr3\t.\tmRNA\t1\t16\t.\t+\t.\tID=rna-gamma;Parent=gene-gamma",
+        "chr3\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-gamma;Parent=rna-gamma;product=test gene gamma",
+        "chr3\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-gamma;Parent=rna-gamma;product=test gene gamma",
     ]
     with open(gff_path, "w") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -168,7 +176,7 @@ def test_gene_model_matches_biopython_extract(gbff):
                 continue
             product = feature.qualifiers["product"][0]
             models = va.build_gene_models_gbff(
-                gbff, {record.id}, [product], "CDS", "product", exact_match=True
+                gbff, {record.id}, [product], "product", exact_match=True
             )
             model = models[product]
             assert model.ref_coding == str(feature.extract(record.seq)).upper()
@@ -176,7 +184,7 @@ def test_gene_model_matches_biopython_extract(gbff):
 
 def test_alpha_reference_protein(gbff):
     models = va.build_gene_models_gbff(
-        gbff, {record.id for record in SeqIO.parse(gbff, "genbank")}, ["test gene alpha"], "CDS", "product", exact_match=True
+        gbff, {record.id for record in SeqIO.parse(gbff, "genbank")}, ["test gene alpha"], "product", exact_match=True
     )
     assert models["test gene alpha"].ref_coding == ALPHA_CODING
     assert models["test gene alpha"].protein == "MYPKGFH*"
@@ -476,7 +484,7 @@ def test_insertion_at_cds_start_preserves_start_codon(gbff):
     # inserting immediately 5' of the ATG must splice before c.1 (cds index 0),
     # keeping ATG intact and inserting Phe (TTT) rather than corrupting the frame.
     models = va.build_gene_models_gbff(
-        gbff, {record.id for record in SeqIO.parse(gbff, "genbank")}, ["test gene alpha"], "CDS", "product", exact_match=True
+        gbff, {record.id for record in SeqIO.parse(gbff, "genbank")}, ["test gene alpha"], "product", exact_match=True
     )
     model = models["test gene alpha"]
     # alpha CDS starts at genomic 9
@@ -535,7 +543,7 @@ def test_gff_gene_model_matches_biopython_extract(gff_fa):
         ("test gene gamma", "ATGTATAAATGA"),
     ):
         models = va.build_gene_models_gff(
-            gff, fa, contigs, [product], "CDS", "product", exact_match=True
+            gff, fa, contigs, [product], "product", exact_match=True
         )
         assert models[product].ref_coding == expected
 
