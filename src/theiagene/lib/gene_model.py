@@ -255,7 +255,6 @@ class GeneModel(Transcript):
     ``protein``      translation of the spliced coding sequence
     ``rna``          the spliced coding sequence as RNA (coding strand, T->U)
     ``dna``          the full transcript span, introns included, on the coding strand
-    ``revcomp_dna``  the reverse complement of ``dna`` (template strand)
 
     Beyond the transcript's coordinates it carries the gene-level identity the
     downstream annotation needs (``gene_id``, ``contig``, ``contig_seq``,
@@ -297,7 +296,6 @@ class GeneModel(Transcript):
         self.protein = ""
         self.rna = ""
         self.dna = ""
-        self.revcomp_dna = ""
 
     @classmethod
     def from_gene(cls, gene: Gene) -> "GeneModel":
@@ -407,7 +405,6 @@ class GeneModel(Transcript):
         if self.strand == -1:
             span = reverse_complement(span)
         self.dna = span
-        self.revcomp_dna = reverse_complement(span)
 
     def codon(self, codon_number: int) -> str:
         """Return the reference codon (1-based codon number) or '' if incomplete"""

@@ -32,6 +32,7 @@ class Variant:
         self, model: GeneModel, changed_pos0: int, ref_seg: str, alt_seg: str
     ):
         self.model = model
+        # position of variant
         self.changed_pos0 = changed_pos0
         self.ref_seg = ref_seg
         self.alt_seg = alt_seg
@@ -44,7 +45,11 @@ class Variant:
         (empty REF and ALT segments) or one that does not touch coding bases."""
         if len(self.ref_seg) == 1 and len(self.alt_seg) == 1:
             return self.annotate_snp()
+        # if no SNPs are annotated by no ref and alt
         if not self.ref_seg and not self.alt_seg:
+            return None
+        # guard against indel path for erroneously labeled SNVs that are not variants 
+        elif len(self.ref_seg) > 1 and self.ref_seg == self.alt_seg:
             return None
         return self.annotate_indel()
 
@@ -56,6 +61,7 @@ class Variant:
         if cds_idx is None:
             return None  # not within a coding base (e.g. intronic anchor)
 
+        # account for reverse complement SNPs/SNVs
         coding_ref = ref if model.strand == 1 else complement(ref)
         coding_alt = alt if model.strand == 1 else complement(alt)
 
@@ -81,7 +87,7 @@ class Variant:
                 "is_frameshift": False,
             }
 
-        mut_codon = (
+        mut_codon = ( 
             ref_codon[:pos_in_codon] + coding_alt + ref_codon[pos_in_codon + 1 :]
         )
         ref_aa = translate(ref_codon, model.transl_table)
@@ -140,8 +146,7 @@ class Variant:
         else:
             # pure insertion: require a coding base immediately on one side, then
             # splice at the count of coding bases lying 5' of the insertion point.
-            # This is strand-aware and correct at exon/CDS boundaries where a naive
-            # flank index would be off by one (5' base of an internal exon / CDS start)
+            # This is strand-aware and correct at exon/CDS boundaries
             if (
                 changed_pos0 - 1
             ) not in model.pos2cds and changed_pos0 not in model.pos2cds:
