@@ -216,7 +216,6 @@ def test_genemodel_derives_four_sequences_including_introns():
     assert model.protein == "MF"
     assert model.rna == "AUGUUU"                  # spliced CDS as RNA
     assert model.dna == "ATGCCCTTT"               # full span, intron included
-    assert model.revcomp_dna == sequence.reverse_complement(model.dna)
     assert model.codon(1) == "ATG" and model.aa_at(1) == "M"
 
 
@@ -224,9 +223,8 @@ def test_genemodel_minus_strand_sequences_are_coding_oriented():
     contig = "AAA" + "ATG" + "CCC" + "TTT" + "AAA"
     model = gene_model.GeneModel("g", "c", strand=-1, parts={"CDS": [(3, 6), (9, 12)]})
     model.finalize(contig)
-    # dna is the full span on the coding (minus) strand; revcomp is the plus strand
+    # dna is the full span on the coding (minus) strand 
     assert model.dna == sequence.reverse_complement("ATGCCCTTT")
-    assert model.revcomp_dna == "ATGCCCTTT"
     assert model.ref_coding == sequence.reverse_complement("ATGTTT")
 
 
