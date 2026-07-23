@@ -6,9 +6,6 @@ subcommands:
 
 - **`gene_coverage`** — quantify the breadth and depth of coverage over query
   genes from a BAM
-- **`variant_annotation`** — annotate the protein-level consequences
-  (missense / synonymous / nonsense substitutions, in-frame insertions/deletions
-  and frameshifts) of variants that overlap query genes
 
 ## Installation
 
@@ -23,7 +20,6 @@ pip install -e '.[test]'
 ```bash
 theiagene --help
 theiagene gene_coverage --help
-theiagene variant_annotation --help
 ```
 
 ### gene_coverage
