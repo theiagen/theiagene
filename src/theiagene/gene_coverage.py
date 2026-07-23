@@ -166,7 +166,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--reference_gbff")
     parser.add_argument("--reference_gff")
     parser.add_argument("--query_genes", nargs="+")
-    parser.add_argument("--feature_qualifier", default="product")
+    parser.add_argument("--feature_qualifier", default="product", help="feature qualifier to derive name search from")
     parser.add_argument(
         "--feature_type",
         default="CDS",
