@@ -12,9 +12,9 @@ import argparse
 import pysam
 
 from theiagene.lib.query import extract_queries_from_bed
-from theiagene.lib.io_utils import write_json
 from theiagene.lib.gene_model import Gene
 from theiagene.lib.parsers import (
+    write_json,
     import_bam,
     iter_gbff_raw,
     iter_gff_raw,
