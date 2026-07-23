@@ -3,6 +3,7 @@
 
 import os
 import gzip
+import json
 import logging
 import threading
 from collections import defaultdict
@@ -26,6 +27,16 @@ logger = logging.getLogger(__name__)
 
 # GFF strand column -> BioPython-style strand integer ('.'/'?' -> None)
 GFF_STRAND = {"+": 1, "-": -1}
+
+
+def write_json(filename: str, data: dict) -> None:
+    """Write a JSON file compatible with WDL"""
+    with open(filename, "w") as f:
+        if data:
+            json.dump(data, f, indent=4)
+        else:
+            # spoof Cromwell (Terra WDL)
+            f.write('{"": 0}')
 
 
 def parse_gff_attributes(attributes: str, field_delimiter: str = ";", value_delimiter: str = "=") -> dict:
