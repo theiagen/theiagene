@@ -1,9 +1,4 @@
-"""Query-gene identifier resolution shared by the theiagene commands.
-
-Both ``gene_coverage`` and ``variant_annotation`` accept a set of query genes
-and must decide whether a feature identifier (product name, locus tag, ...)
-matches one of them.  This module collects the identifier-matching and
-normalization helpers used by both."""
+"""Query-gene identifier resolution shared by the theiagene commands."""
 
 
 def exact_check(query_set: set, id: str) -> bool:

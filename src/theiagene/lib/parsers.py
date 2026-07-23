@@ -310,7 +310,7 @@ def match_identifiers(
 
     Returns ``(matched, identifiers)`` where ``identifiers`` is every value
     collected across ``id_qualifiers`` (in order).  When ``normalize`` is True
-    (variant_annotation) matching is normalization-aware via
+    matching is normalization-aware via
     :func:`theiagene.lib.query.match_query` and ``matched`` is the query term that
     matched; when False (gene_coverage) a raw exact/substring test is applied per
     identifier and ``matched`` is the matching identifier itself.  ``matched`` is
