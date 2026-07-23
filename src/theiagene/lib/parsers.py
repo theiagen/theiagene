@@ -1,7 +1,10 @@
 """Shared reference-parsing layer for the theiagene commands.
 """
 
+import os
+import gzip
 import logging
+import threading
 from collections import defaultdict
 from urllib.parse import unquote
 
@@ -569,10 +572,83 @@ def flatten_coords_by_contig(genes, full_range: bool = False) -> dict:
     return contig2ranges
 
 
-def extract_vcf_genes(vcffile: str, genes, output_vcf: str) -> int:
+def _is_bgzf(path: str) -> bool:
+    """True when ``path`` starts with the gzip/BGZF magic bytes.
+
+    A plain-text VCF starts with ``##`` (0x23 0x23), so this cleanly separates a
+    compressed input (which pysam probes for an index) from an uncompressed one
+    (which neither supports nor needs an index)."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
+def _clean_gq_scientific(line: str) -> str:
+    """Rewrite GQ subfields written in scientific/float notation as plain
+    integers on a single VCF data line.
+
+    htslib parses GQ per its Integer header type and rejects values like
+    ``3.5e+01`` or ``35.0`` — pysam raises even while merely iterating records,
+    so the fix has to happen in the text before pysam ever sees the value.
+    Coercion is a plain ``int(float(x))``; if a value can't be coerced the
+    error is left to propagate, which is fine because pysam couldn't consume
+    that value either. Missing values (``.``) are passed through untouched."""
+    cols = line.rstrip("\n").split("\t")
+    # need FORMAT (col 9) plus at least one sample column (col 10+)
+    if len(cols) < 10:
+        return line
+    fmt = cols[8].split(":")
+    if "GQ" not in fmt:
+        return line
+    gq = fmt.index("GQ")
+    for i in range(9, len(cols)):
+        sub = cols[i].split(":")
+        if gq < len(sub) and sub[gq] != ".":
+            sub[gq] = str(int(float(sub[gq])))
+            cols[i] = ":".join(sub)
+    return "\t".join(cols) + "\n"
+
+
+def import_vcf(vcffile: str) -> pysam.VariantFile:
+    """Open a VCF/BCF, first cleaning GQ values written in scientific/float
+    notation into plain integers.
+
+    Some callers emit GQ as e.g. ``3.5e+01``; pysam parses GQ per its Integer
+    header type and raises on such values — even iterating the records fails —
+    so the file cannot be scrubbed through pysam itself. Instead the VCF text is
+    read (decompressing BGZF), rewritten line by line, and streamed straight
+    into ``pysam.VariantFile`` through an OS pipe, avoiding an intermediate file
+    on disk. pysam needs a real file descriptor (a ``BytesIO`` has no
+    ``fileno``), hence the pipe. Cleaning happens eagerly here, so an
+    uncoercible GQ raises from this call rather than mid-iteration."""
+    opener = gzip.open if _is_bgzf(vcffile) else open
+    with opener(vcffile, "rt") as src:
+        cleaned = "".join(
+            line if line.startswith("#") else _clean_gq_scientific(line)
+            for line in src
+        ).encode()
+
+    read_fd, write_fd = os.pipe()
+
+    def _feed():
+        # the pipe buffer is small, so pump the cleaned bytes from a thread
+        # while pysam drains the read end; only raw I/O happens here (all
+        # coercion already ran above), so this thread cannot raise a value error
+        with os.fdopen(write_fd, "wb") as dst:
+            try:
+                dst.write(cleaned)
+            except BrokenPipeError:
+                pass  # reader closed early; nothing left to do
+
+    threading.Thread(target=_feed, daemon=True).start()
+    return pysam.VariantFile(os.fdopen(read_fd, "rb"))
+
+
+def extract_vcf_genes(vcf_in, genes, output_vcf: str) -> int:
     """Filter a VCF to variants overlapping query gene coordinates, annotating the
     overlapping gene name(s) in a GENE INFO field. Returns the count of written records"""
-    vcf_in = pysam.VariantFile(vcffile)
     # define the INFO field used to annotate the overlapping gene name(s)
     if "GENE" not in vcf_in.header.info:
         vcf_in.header.info.add(

@@ -48,6 +48,7 @@ from theiagene.lib.parsers import (  # noqa: F401
     build_gene_models_gbff,
     build_gene_models_gff,
     extract_vcf_genes,
+    import_vcf,
 )
 from theiagene.lib.logging_config import configure_logging
 from theiagene.lib.variant import Variant
@@ -243,7 +244,7 @@ def run(
     query_arg = query_genes if isinstance(query_genes, (list, tuple)) else [query_genes]
     ordered = ordered_query_genes(query_arg)
     # inefficiently reads VCF into memory
-    vcf = pysam.VariantFile(vcffile)
+    vcf = import_vcf(vcffile)
     contig_names = set(vcf.header.contigs)
     if reference_gbff:
         models_by_key = build_gene_models_gbff(
@@ -270,7 +271,7 @@ def run(
     # a model is registered under many keys, so dedupe to the distinct models
     if gene_vcf:
         extract_vcf_genes(
-            vcffile, list(dict.fromkeys(models_by_key.values())), gene_vcf
+            vcf, list(dict.fromkeys(models_by_key.values())), gene_vcf
         )
     annotations = annotate_vcf(
         vcf, models_by_key, suppress_downstream_frameshift=suppress_downstream_frameshift
