@@ -6,7 +6,7 @@ of which registers its own arguments and runs its own pipeline."""
 import sys
 import argparse
 
-from theiagene import __version__, gene_coverage, variant_annotation
+from theiagene import __version__, gene_coverage
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -16,12 +16,7 @@ _SUBCOMMANDS = (
         "gene_coverage",
         gene_coverage,
         "quantify breadth/depth of coverage over query genes from a BAM",
-    ),
-    (
-        "variant_annotation",
-        variant_annotation,
-        "annotate the protein-level consequences of gene variants",
-    ),
+    )
 )
 
 
