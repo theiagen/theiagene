@@ -1,12 +1,7 @@
 """Feature/gene data model shared by the theiagene commands."""
 
 from io import StringIO
-from collection import defaultdict
-
-from Bio.Seq import Seq
-from Bio.SeqRecord import SeqRecord
-from Bio.SeqFeature import SeqFeature, FeatureLocation
-from Bio import SeqIO
+from collections import defaultdict
 
 # GFF strand column -> BioPython-style strand integer ('.'/'?' -> None)
 _STRAND = {"+": 1, "-": -1}
@@ -167,3 +162,10 @@ def group_features(features: list, parent_ids: list = ["Parent", "parent"], ids:
         feature_dict[seqid].append(feature)
 
     return feature_dict
+
+
+def extract_features(features: list, feature_type: str, exact_match: bool = False):
+    if exact_match:
+        return [x for x in features if x.type == feature_type]
+    else:
+        return [x for x in features if feature_type in x.type]
