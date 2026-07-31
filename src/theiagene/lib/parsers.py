@@ -127,10 +127,7 @@ def assimilate_gff(gff: str) -> FeatureCol:
 
 
 def import_bam(bamfile: str) -> pysam.AlignmentFile:
-    """Open a BAM (indexing it first if needed).
-
-    Raises ``ValueError`` when ``ambiguous_contig`` is requested but the
-    reference has more than one contig (the single-contig assumption fails)."""
+    """Open a BAM (indexing it first if needed)."""
     imported_bam = pysam.AlignmentFile(bamfile)
     # generate an index if it does not exist
     if not imported_bam.has_index():

@@ -16,11 +16,7 @@ from theiagene.lib.feature import FeatureCol
 from theiagene.lib.parsers import (
     write_json,
     import_bam,
-    assimilate_gbff,
     assimilate_gff,
-    match_identifiers,
-    resolve_contig,
-    parse_bed_genes,
 )
 from theiagene.lib.logging_config import configure_logging
 
@@ -148,9 +144,7 @@ def run_cli(args: argparse.Namespace) -> int:
         query_set = extract_queries_from_bed(args.bedfile)
 
     # import BAM and modify contig coordinates if needed
-    imported_bam = import_bam(
-        args.bam, args.ambiguous_contig
-    )
+    imported_bam = import_bam(args.bam)
 
     # convert GFF into a FeatureCol (parent/descendant hierarchy wired up)
     features = assimilate_gff(args.reference_gff)
