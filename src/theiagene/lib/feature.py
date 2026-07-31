@@ -226,6 +226,10 @@ def group_features(features: list, parent_ids: list = ["Parent", "parent"], ids:
             for id_ in ids:
                 if id_ in feature.attributes:
                     feature.attributes[id_] = fid
+            # keep the cached fid in step with the renamed attribute so the
+            # FeatureCol index (keyed on fid) sees a distinct feature per
+            # multi-segment CDS rather than colliding on the shared id
+            feature.fid = fid
         id2feature[fid] = feature
 
     feature_dict = defaultdict(list)
@@ -282,13 +286,23 @@ class FeatureCol:
 
     def _extract_types(self):
         """Bucket features by canonical class and store each list as an
-        attribute (`self.genes`, `self.rnas`, `self.cds`, `self.exons`)."""
+        attribute (`self.genes`, `self.rnas`, `self.cds`, `self.exons`), and
+        build the `fid` -> Feature index used by `by_id`/`get`.
+
+        Raises KeyError if two features share an `fid` (after any deduplication
+        `group_features` applied), so an ambiguous index is surfaced rather than
+        silently collapsed."""
         buckets = {name: [] for name in _FEATURE_CLASSES}
+        index = {}
         for feature in self.features:
             cls = self._class_of(feature.type)
             if cls is not None:
                 buckets[cls].append(feature)
+            if feature.fid in index:
+                raise KeyError(f"duplicate feature ID in collection: {feature.fid!r}")
+            index[feature.fid] = feature
         self._buckets = buckets
+        self._index = index
         self.genes = buckets["gene"]
         self.rnas = buckets["rna"]
         self.cds = buckets["cds"]
@@ -332,6 +346,21 @@ class FeatureCol:
         full hierarchy stays reachable through `.descendants`; grouping is
         skipped to preserve those links rather than rebuild them."""
         return FeatureCol([f for f in self.features if f.parent is None], group=False)
+
+    def by_id(self, fid):
+        """Return the Feature whose `fid` equals `fid`, raising KeyError if no
+        feature in this collection has that ID.
+
+        Only features in `self.features` are indexed; descendants reachable only
+        through `.descendants` (e.g. after `roots()`) are not, mirroring how the
+        class buckets are populated."""
+        return self._index[fid]
+
+    def get(self, fid, default=None):
+        """Return the Feature whose `fid` equals `fid`, or `default` if no
+        feature in this collection has that ID (non-raising counterpart of
+        `by_id`)."""
+        return self._index.get(fid, default)
 
     def _resolve_key(self, key: str):
         """Map an access key to a canonical class: a class name ('gene'), its

@@ -6,7 +6,7 @@ of which registers its own arguments and runs its own pipeline."""
 import sys
 import argparse
 
-from theiagene import __version__, gene_coverage, extract_variants
+from theiagene import __version__, gene_coverage, extract_variants, report_variants
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -21,6 +21,11 @@ _SUBCOMMANDS = (
         "extract_variants",
         extract_variants,
         "extract a sub-VCF of variants within query genes from a VCF",
+    ),
+    (
+        "report_variants",
+        report_variants,
+        "render VEP variant annotations into product-named report lines",
     ),
 )
 
