@@ -10,13 +10,10 @@ from collections import defaultdict, Counter
 from urllib.parse import unquote
 
 import pysam
-from Bio import SeqIO
 
-from theiagene.lib.feature import Feature
+from theiagene.lib.feature import Feature, FeatureCol
 from theiagene.lib.query import (
-    exact_check,
-    substring_check,
-    sanitize_info_value,
+    sanitize_info_value
 )
 
 
@@ -90,12 +87,10 @@ def format_gff_attributes(attributes: dict, field_delimiter: str = ";", value_de
     )
 
 
-def iter_gff_features(reference_gff: str, id_qualifiers: list = ["id", "ID", "Id"], parent_qualifiers: list = ["parent", "Parent"]):
+def iter_gff_features(reference_gff: str):
     """Yield a Feature class from a GFF3 file."""
     with open(reference_gff) as handle:
         for line in handle:
-            fid = None
-            pid = None
             line = line.rstrip("\n")
             # a '##FASTA' directive ends the annotation section
             if line.startswith("##FASTA"):
@@ -106,23 +101,7 @@ def iter_gff_features(reference_gff: str, id_qualifiers: list = ["id", "ID", "Id
             if len(fields) != 9:
                 raise ValueError(f"incorrectly formatted GFF: {len(fields)} fields recovered; 9 expected")
             seqid, source, obs_type, start, end, score, strand, phase, raw_attributes = fields
-            attributes = parse_gff_attributes(raw_attributes)
-            for key in id_qualifiers:
-                if key in attributes:
-                    fid = attributes[key]
-                    break
-            if not fid:
-                raise ValueError(f"none of {id_qualifiers} found in record attributes") 
-            del attributes[key]
-            for key in parent_qualifiers:
-                if key in attributes:
-                    pid = attributes[key]
-                    break
-            if pid:
-                del attributes[key]
             yield Feature(
-                fid=fid,
-                pid=pid,
                 seqid=seqid,
                 source=source,
                 type=obs_type,
@@ -132,143 +111,22 @@ def iter_gff_features(reference_gff: str, id_qualifiers: list = ["id", "ID", "Id
                 score=score,
                 strand=strand,
                 phase=phase,
-                attributes=parse_gff_attributes(attributes),
+                # let the Feature parse the raw column-9 string and derive fid/pid
+                attributes=raw_attributes,
+                ingest=True,
             )
 
 
-def _assimilate_gbff_features(features: list) -> None:
-    """Populate the ``parent``/``descendants`` links of one record's features in
-    place, inferring the hierarchy GenBank leaves implicit.
+def assimilate_gff(gff: str) -> FeatureCol:
+    """Group every GFF3 record onto its root ancestor Feature via ``Parent``/``ID`` links.
 
-    GenBank features carry no explicit ``Parent``/``ID`` links (unlike GFF3), so
-    nesting is derived two ways.  A CDS/exon is linked to its parent ``*RNA`` by
-    a shared ``transcript_id`` qualifier whenever both carry one -- this holds
-    even when the file order interleaves isoforms.  Failing that, parse order
-    decides: a ``gene`` opens a new locus, an ``*RNA`` nests under the most
-    recent gene, and a CDS/exon (or any other subfeature) nests under the most
-    recent RNA, falling back to the most recent gene.  Features preceding the
-    first gene (e.g. the record-spanning ``source``) stay parentless roots."""
-    # map each RNA transcript to its Feature so a CDS/exon carrying the same
-    # transcript_id links straight to the right isoform regardless of file order
-    transcript2rna = {
-        feature.attributes["transcript_id"]: feature
-        for feature in features
-        if feature.type.endswith("RNA") and "transcript_id" in feature.attributes
-    }
-
-    super_gene = False
-    current_gene = None
-    current_rna = None
-    for feature in features:
-        if feature.type == "gene":
-            current_gene, current_rna = feature, None
-            continue
-        # subsupergene feature
-        if super_gene:
-            parent = super_gene
-            super_gene = False
-        # supergene feature (reset if we're still super)
-        if not current_gene:
-            super_gene = feature
-        if feature.type.endswith("RNA"):
-            parent = current_gene
-            current_rna = feature
-        else:
-            # CDS/exon (or any other subfeature): prefer the transcript_id link,
-            # else nest under the most recent RNA, else the most recent gene
-            transcript_id = feature.attributes.get("transcript_id")
-            parent = transcript2rna.get(transcript_id) or current_rna or current_gene
-        if parent is not None:
-            feature.parent = parent
-            feature.pid = parent.id
-            parent.descendants.append(feature)
+    Returns a :class:`FeatureCol`, which wires up the parent/descendant hierarchy
+    on construction (gene/RNA ids are unique; multi-segment CDS reuse one id
+    harmlessly -- first occurrence wins)."""
+    return FeatureCol(iter_gff_features(gff))
 
 
-def assimilate_gbff_raw(gbff: str, use_id: bool = True, feature_qualifier: str = "locus_tag") -> list:
-    """Parse a GenBank flat file into a flat list of hierarchically assimilated
-    :class:`Feature` objects.
-
-    Every feature across every record is materialized as a :class:`Feature`.  The
-    seqid is taken from ``record.id`` (an accession.version) when ``use_id`` is
-    True, else from ``record.name`` (the LOCUS name).  BioPython feature
-    locations are already 0-based, half-open, matching Feature's internal
-    convention, so no coordinate conversion is applied.  Every feature qualifier
-    present is carried into ``attributes``; BioPython stores each qualifier value
-    as a list, so a lone value is unwrapped and multiple values are joined,
-    keeping the scalar ``{key: value}`` convention Feature shares with the GFF
-    parser.  The full record sequence is passed as ``origin_sequence`` so each
-    Feature slices out (and stores) only its own forward-strand span.
-
-    Features are then linked into parent/child trees *within each record* (see
-    :func:`_assimilate_gbff_features`): every returned Feature has its ``parent``
-    and ``descendants`` populated.  The returned list holds every feature in file
-    order, so a root feature precedes its descendants -- mirroring the flat,
-    already-linked list :func:`group_features` produces for GFF3."""
-    features = []
-    fids = Counter()
-    with open(gbff) as handle:
-        for record in SeqIO.parse(handle, "genbank"):
-            seqid = record.id if use_id else record.name
-            origin_sequence = str(record.seq)
-            record_features = []
-            for feature in record.features:
-                attributes = {
-                    key: value[0] if len(value) == 1 else ", ".join(map(str, value))
-                    for key, value in feature.qualifiers.items()
-                }
-                fid = attributes[feature_qualifier]
-                # add 1 to the counter (1-indexed IDs)
-                fids[fid] += 1
-                record_features.append(Feature(
-                    fid=attributes[feature_qualifier] + f"_{feature.type}{fids[fid]}",
-                    seqid=seqid,
-                    type=feature.type,
-                    start=int(feature.location.start),
-                    end=int(feature.location.end),
-                    strand=feature.location.strand,
-                    attributes=attributes,
-                    origin_sequence=origin_sequence,
-                ))
-            _assimilate_gbff_features(record_features)
-            features.extend(record_features)
-        
-    return features
-
-
-def assimilate_gbff(gbff: str) -> list:
-    """Group every GBFF record onto its root ancestor Feature via ``Parent``/``ID`` links."""
-    # read every feature; index by ID for Parent-chain resolution (gene/RNA ids are
-    # unique, multi-segment CDS reuse one id harmlessly -- first occurrence wins)
-    features = assimilate_gbff_raw(gbff)
-    features_dict = defaultdict(list)
-    for feature in features:
-        features_dict[feature.seqid].append(feature)
-    return features_dict
-
-
-def assimilate_gff(gff: str) -> list:
-    """Group every GFF3 record onto its root ancestor Feature via ``Parent``/``ID`` links."""
-    # read every feature; index by ID for Parent-chain resolution (gene/RNA ids are
-    # unique, multi-segment CDS reuse one id harmlessly -- first occurrence wins)
-    features = list(iter_gff_features(gff, None))
-    features_dict = group_features(features)
-    return features_dict
-
-
-def resolve_contig(candidates, contig_names, require: bool, source_label: str) -> str:
-    """Return the first candidate present in ``contig_names``.
-
-    Falls back to the first candidate when ``require`` is False; raises
-    ``KeyError`` when required and none of the candidates are present."""
-    for candidate in candidates:
-        if candidate in contig_names:
-            return candidate
-    if require:
-        raise KeyError(f"{' and '.join(candidates)} not in {source_label}")
-    return candidates[0]
-
-
-def import_bam(bamfile: str, ambiguous_contig: bool) -> pysam.AlignmentFile:
+def import_bam(bamfile: str) -> pysam.AlignmentFile:
     """Open a BAM (indexing it first if needed).
 
     Raises ``ValueError`` when ``ambiguous_contig`` is requested but the
@@ -280,36 +138,25 @@ def import_bam(bamfile: str, ambiguous_contig: bool) -> pysam.AlignmentFile:
         pysam.index(bamfile)
         imported_bam = pysam.AlignmentFile(bamfile)
 
-    # determine if import is compatible with a single contig reference
-    contig_names = imported_bam.references
-    if ambiguous_contig:
-        # can't apply ambiguous contig approach if there are multiple contigs
-        if len(contig_names) > 1:
-            raise ValueError(
-                "can't use ambiguous_contig coordinates when there are multiple contigs in the reference"
-            )
     return imported_bam
 
 
 def parse_bed_genes(
     bedfile: str,
-    query_list,
     exact_match: bool,
     contig_names,
     require: bool = True,
-    source_label: str = "BAM",
     feature_type: str = "CDS",
 ) -> list:
     """Parse a BED file into :class:`Gene` objects (coverage-only format).
 
     Rows sharing a name on the same contig accumulate as multiple parts, matching
-    the multi-segment handling of the GBFF/GFF parsers.  A BED file carries no
+    the multi-segment handling of the GFF parsers.  A BED file carries no
     feature type of its own, so its regions are filed under ``feature_type`` (the
     type the coverage caller quantifies) so they are read back consistently."""
-    query_set = set(query_list)
-    check = exact_check if exact_match else substring_check
-    genes = {}
     order = []
+    parent2feature_dict = defaultdict(list)
+    counter = Counter()
     with open(bedfile) as handle:
         for line in handle:
             if line.startswith("#"):
@@ -317,19 +164,24 @@ def parse_bed_genes(
             data = line.split()
             if not data:
                 continue
-            name = data[3]
-            if not check(query_set, name):
-                continue
+            # we will assume the name is the parent ID in case there are multiple
+            pid = data[3]
+            # 1-index Counter
+            counter[pid] += 1
+            fid = pid + f"_{counter[pid]}"
             # BED files are already 0-based, half-open
-            contig = resolve_contig([data[0]], contig_names, require, source_label)
-            key = (contig, name)
-            gene = genes.get(key)
-            if gene is None:
-                gene = Gene(gene_id=name, contig=contig)
-                genes[key] = gene
-                order.append(key)
-            gene.add_part(int(data[1]), int(data[2]), feature=feature_type)
-    return [genes[key] for key in order]
+            contig = data[0]
+            feature = Feature(fid=fid, 
+                              pid=pid,
+                              seqid=contig,
+                              score=data[4] if len(data) > 4 else None,
+                              strand=data[5] if len(data) > 5 else None,
+                              start=data[1],
+                              end=data[2],
+                              type=feature_type
+                            )
+            parent2feature_dict[pid].append(feature)
+    
 
 
 def flatten_coords_by_contig(genes, full_range: bool = False) -> dict:

@@ -1,117 +1,83 @@
+"""Unit tests for theiagene.gene_coverage (coverage quantification + helpers)."""
+
 import re
 
 import pytest
-from Bio import SeqIO
-from Bio.Seq import Seq
-from Bio.SeqFeature import FeatureLocation, SeqFeature
-from Bio.SeqRecord import SeqRecord
 
 from theiagene import gene_coverage
-from theiagene.lib.gene_model import Gene
+from theiagene.lib.feature import Feature
 
+
+# --------------------------------------------------------------------------- #
+# test doubles
+# --------------------------------------------------------------------------- #
 
 class MockBam:
-    def __init__(self, references, contig_lengths, default_depth=5):
-        self.references = tuple(references)
-        self._lengths = dict(contig_lengths)
-        self._default_depth = default_depth
+    """A minimal stand-in for pysam.AlignmentFile.
+
+    ``depth_fn(contig, pos) -> int`` supplies per-base depth (default: a flat
+    ``default_depth``); all of it is reported in the first (A) channel so the
+    four-channel sum used by quantify_gene_coverage equals that depth."""
+
+    def __init__(self, lengths, depth_fn=None, default_depth=5):
+        self._lengths = dict(lengths)
+        self.references = tuple(lengths)
+        self._depth_fn = depth_fn
+        self._default = default_depth
+        self.seen_quality = []
 
     def get_reference_length(self, contig):
         return self._lengths[contig]
 
     def count_coverage(self, contig, start, end, quality_threshold=0):
-        span = end - start
-        return (
-            [self._default_depth] * span,
-            [0] * span,
-            [0] * span,
-            [0] * span,
+        self.seen_quality.append(quality_threshold)
+        a = [
+            self._depth_fn(contig, pos) if self._depth_fn else self._default
+            for pos in range(start, end)
+        ]
+        zeros = [0] * (end - start)
+        return (a, list(zeros), list(zeros), list(zeros))
+
+
+def _rna_with_cds(fid, contig, segments, cds_type="CDS"):
+    """Build an RNA Feature carrying one CDS descendant per (start, end) segment."""
+    rna = Feature(fid=fid, seqid=contig, type="mRNA", start=min(s for s, _ in segments),
+                  end=max(e for _, e in segments))
+    for i, (start, end) in enumerate(segments):
+        rna.descendants.append(
+            Feature(fid=f"{fid}_cds{i}", pid=fid, seqid=contig, type=cds_type,
+                    start=start, end=end)
         )
-
-
-def _write_mock_gbff(path, contig="contig1", gene="geneA", start=10, end=20):
-    record = SeqRecord(Seq("ATCG" * 50), id=contig, name=contig, description="")
-    record.annotations["molecule_type"] = "DNA"
-    record.features.append(
-        SeqFeature(
-            FeatureLocation(start, end),
-            type="CDS",
-            qualifiers={"product": [gene]},
-        )
-    )
-    with open(path, "w") as handle:
-        SeqIO.write(record, handle, "genbank")
-
-
-def test_parse_gbff_extracts_expected_coordinates(tmp_path):
-    mock_bam = MockBam(
-        references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
-    )
-    gbff = tmp_path / "mock.gbff"
-    _write_mock_gbff(gbff, contig="contig1", gene="geneA", start=10, end=20)
-
-    genes = gene_coverage._coverage_genes(
-        gene_coverage.iter_gbff_raw(str(gbff)),
-        {"geneA"},
-        "product",
-        exact_match=True,
-        contig_names=set(mock_bam.references),
-        require_contig=True,
-    )
-
-    assert len(genes) == 1
-    assert (genes[0].contig, genes[0].gene_id) == ("contig1", "geneA")
-    assert genes[0].cds == [(10, 20)]
-
-
-def test_bed_and_gbff_coordinates_agree_for_same_gene(tmp_path):
-    mock_bam = MockBam(
-        references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
-    )
-
-    gbff = tmp_path / "mock.gbff"
-    _write_mock_gbff(gbff, contig="contig1", gene="geneA", start=10, end=20)
-
-    bed = tmp_path / "mock.bed"
-    bed.write_text("contig1\t10\t20\tgeneA\n")
-
-    from_gbff = gene_coverage._coverage_genes(
-        gene_coverage.iter_gbff_raw(str(gbff)),
-        {"geneA"},
-        "product",
-        exact_match=True,
-        contig_names=set(mock_bam.references),
-        require_contig=True,
-    )
-    from_bed = gene_coverage.parse_bed_genes(
-        str(bed),
-        {"geneA"},
-        exact_match=True,
-        contig_names=set(mock_bam.references),
-    )
-
-    assert from_gbff[0].cds == from_bed[0].cds == [(10, 20)]
+    return rna
 
 
 class _Args:
+    """A stand-in argparse.Namespace for input_error_handling."""
+
     def __init__(self, **kwargs):
         self.bedfile = None
-        self.reference_gbff = None
         self.reference_gff = None
         self.query_genes = None
         self.__dict__.update(kwargs)
 
 
-def test_input_error_handling_accepts_reference_gff():
-    # a GFF reference with query genes is a valid invocation (regression: the
-    # GFF option used to be rejected because only GBFF/BED were recognized)
+# --------------------------------------------------------------------------- #
+# input_error_handling
+# --------------------------------------------------------------------------- #
+
+def test_input_error_handling_accepts_gff_with_query_genes():
     gene_coverage.input_error_handling(
         _Args(reference_gff="ref.gff", query_genes=["geneA"])
     )
 
 
+def test_input_error_handling_accepts_bedfile_alone():
+    # a BED supplies both a coordinate source and the query names
+    gene_coverage.input_error_handling(_Args(bedfile="regions.bed"))
+
+
 def test_input_error_handling_requires_a_coordinate_source():
-    with pytest.raises(FileNotFoundError, match="reference_gff"):
+    with pytest.raises(FileNotFoundError, match="reference_gff.*bedfile|bedfile"):
         gene_coverage.input_error_handling(_Args(query_genes=["geneA"]))
 
 
@@ -120,158 +86,169 @@ def test_input_error_handling_requires_query_genes_without_bed():
         gene_coverage.input_error_handling(_Args(reference_gff="ref.gff"))
 
 
-def test_parse_gff_extracts_expected_coordinates(tmp_path):
-    # GFF is 1-based, both-inclusive; geneA at 1-based [11, 20] == 0-based [10, 20)
-    gff = tmp_path / "mock.gff"
-    gff.write_text(
-        "##gff-version 3\n"
-        "contig1\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
+# --------------------------------------------------------------------------- #
+# make_tsv
+# --------------------------------------------------------------------------- #
+
+def test_make_tsv_renders_header_and_rows():
+    tsv = gene_coverage.make_tsv(
+        {"geneA": 5.0, "geneB": 2.0},
+        {"geneA": 100.0, "geneB": 50.0},
+        ambiguous_contig=False,
     )
-    genes = gene_coverage._coverage_genes(
-        gene_coverage.iter_gff_raw(str(gff)),
-        {"geneA"},
-        "product",
-        exact_match=True,
-        contig_names={"contig1"},
-        require_contig=True,
+    lines = tsv.splitlines()
+    assert lines[0] == "#query\taverage_depth\tpercent_coverage"
+    assert lines[1] == "geneA\t5.0\t100.0"
+    assert lines[2] == "geneB\t2.0\t50.0"
+
+
+def test_make_tsv_warns_in_header_when_contig_is_ambiguous():
+    tsv = gene_coverage.make_tsv({"geneA": 1.0}, {"geneA": 100.0}, ambiguous_contig=True)
+    assert tsv.splitlines()[0].startswith("#query (WARNING")
+
+
+# --------------------------------------------------------------------------- #
+# quantify_gene_coverage
+# --------------------------------------------------------------------------- #
+
+def test_quantify_known_depth_and_full_breadth():
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(10, 20)])]}
+
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
+
+    assert depth["geneA"] == 5.0
+    assert coverage["geneA"] == 100.0
+
+
+def test_quantify_sums_across_multiple_cds_segments():
+    bam = MockBam({"contig1": 100}, default_depth=4)
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(0, 6), (10, 16)])]}
+
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
+
+    # 12 evaluated bases, all at depth 4
+    assert depth["geneA"] == 4.0
+    assert coverage["geneA"] == 100.0
+
+
+def test_quantify_partial_breadth_from_min_depth_threshold():
+    # first half of the CDS at depth 10, second half uncovered
+    def depth_fn(contig, pos):
+        return 10 if pos < 15 else 0
+
+    bam = MockBam({"contig1": 100}, depth_fn=depth_fn)
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(10, 20)])]}
+
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
+
+    assert depth["geneA"] == 5.0     # mean of five 10s and five 0s
+    assert coverage["geneA"] == 50.0  # half the bases meet min_depth
+
+
+def test_quantify_min_depth_boundary_is_inclusive():
+    bam = MockBam({"contig1": 100}, default_depth=3)
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(10, 20)])]}
+    # depth exactly at the threshold counts as covered
+    _, coverage = gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=3)
+    assert coverage["geneA"] == 100.0
+    # one above the observed depth counts as uncovered
+    _, coverage = gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=4)
+    assert coverage["geneA"] == 0.0
+
+
+def test_quantify_passes_min_quality_through_to_count_coverage():
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(10, 20)])]}
+    gene_coverage.quantify_gene_coverage(bam, grouped, min_quality=30)
+    assert bam.seen_quality == [30]
+
+
+def test_quantify_selects_requested_feature_type():
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    # coordinates live under the "exon" type only
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(10, 20)], cds_type="exon")]}
+
+    depth, _ = gene_coverage.quantify_gene_coverage(
+        bam, grouped, feature_type="exon", min_depth=1
     )
-    assert genes[0].cds == [(10, 20)]
+    assert depth["geneA"] == 5.0
 
-
-def test_gff_and_bed_coordinates_agree_for_same_gene(tmp_path):
-    gff = tmp_path / "mock.gff"
-    gff.write_text(
-        "##gff-version 3\n"
-        "# a comment line that must be skipped\n"
-        "contig1\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
-    )
-    bed = tmp_path / "mock.bed"
-    bed.write_text("contig1\t10\t20\tgeneA\n")
-
-    from_gff = gene_coverage._coverage_genes(
-        gene_coverage.iter_gff_raw(str(gff)),
-        {"geneA"}, "product", exact_match=True,
-        contig_names={"contig1"}, require_contig=True,
-    )
-    from_bed = gene_coverage.parse_bed_genes(
-        str(bed), {"geneA"}, exact_match=True, contig_names={"contig1"},
-    )
-    assert from_gff[0].cds == from_bed[0].cds == [(10, 20)]
-
-
-def test_parse_gff_multi_exon_accumulates_parts(tmp_path):
-    # two CDS lines for the same gene accumulate as two coordinate parts
-    gff = tmp_path / "multi.gff"
-    gff.write_text(
-        "##gff-version 3\n"
-        "contig1\t.\tCDS\t1\t6\t.\t+\t0\tID=cds-A;product=geneA\n"
-        "contig1\t.\tCDS\t11\t16\t.\t+\t0\tID=cds-A;product=geneA\n"
-    )
-    genes = gene_coverage._coverage_genes(
-        gene_coverage.iter_gff_raw(str(gff)),
-        {"geneA"}, "product", exact_match=True,
-        contig_names={"contig1"}, require_contig=True,
-    )
-    assert genes[0].cds == [(0, 6), (10, 16)]
-
-
-def test_coverage_genes_selects_feature_type_from_parts(tmp_path):
-    # a gene whose exon and CDS spans differ: the feature_type option picks which
-    # coordinates are carried forward for coverage (default CDS, or e.g. exon)
-    gff = tmp_path / "hier.gff"
-    gff.write_text(
-        "##gff-version 3\n"
-        "contig1\t.\tgene\t1\t30\t.\t+\t.\tID=gene-A\n"
-        "contig1\t.\tmRNA\t1\t30\t.\t+\t.\tID=rna-A;Parent=gene-A;product=geneA\n"
-        "contig1\t.\texon\t1\t30\t.\t+\t.\tID=exon-A;Parent=rna-A\n"
-        "contig1\t.\tCDS\t5\t25\t.\t+\t0\tID=cds-A;Parent=rna-A;product=geneA\n"
-    )
-
-    def collect(feature_type):
-        return gene_coverage._coverage_genes(
-            gene_coverage.iter_gff_raw(str(gff)),
-            {"geneA"}, "product", exact_match=True,
-            contig_names={"contig1"}, require_contig=True,
-            feature_type=feature_type,
-        )
-
-    # exon: 1-based [1, 30] -> 0-based [0, 30); CDS: 1-based [5, 25] -> [4, 25)
-    exon_genes = collect("exon")
-    assert exon_genes[0].segments("exon") == [(0, 30)]
-    cds_genes = collect("CDS")
-    assert cds_genes[0].cds == [(4, 25)]
-    # a feature type the gene lacks yields no gene at all
-    assert collect("five_prime_UTR") == []
-
-
-def test_quantify_gene_coverage_uses_requested_feature_type():
-    mock_bam = MockBam(
-        references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
-    )
-    # coordinates live only under the "exon" key
-    genes = [Gene(gene_id="geneA", contig="contig1", parts={"exon": [(10, 20)]})]
-
-    depth_dict, coverage_dict = gene_coverage.quantify_gene_coverage(
-        mock_bam, genes, feature_type="exon", min_depth=1, min_quality=0,
-    )
-    assert depth_dict["geneA"] == 5.0
-    assert coverage_dict["geneA"] == 100.0
-
-    # the default (CDS) finds no coordinates on this gene and reports nothing
+    # the default (CDS) finds no coordinates on this gene
     with pytest.raises(ValueError, match="No positions evaluated"):
-        gene_coverage.quantify_gene_coverage(
-            mock_bam, genes, min_depth=1, min_quality=0,
-        )
+        gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
 
 
-def test_parse_gff_raises_when_contig_absent_from_bam(tmp_path):
-    gff = tmp_path / "mock.gff"
-    gff.write_text(
-        "##gff-version 3\n"
-        "otherContig\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;product=geneA\n"
-    )
-    with pytest.raises(KeyError, match="otherContig not in BAM"):
-        gene_coverage._coverage_genes(
-            gene_coverage.iter_gff_raw(str(gff)),
-            {"geneA"}, "product", exact_match=True,
-            contig_names={"contig1"}, require_contig=True,
-        )
-
-
-def test_quantify_gene_coverage_known_depth_and_breadth():
-    mock_bam = MockBam(
-        references=["contig1"], contig_lengths={"contig1": 100}, default_depth=5
-    )
-    genes = [Gene(gene_id="geneA", contig="contig1", parts={"CDS": [(10, 20)]})]
-
-    depth_dict, coverage_dict = gene_coverage.quantify_gene_coverage(
-        mock_bam,
-        genes,
-        min_depth=1,
-        min_quality=0,
-    )
-
-    assert depth_dict["geneA"] == 5.0
-    assert coverage_dict["geneA"] == 100.0
+def test_quantify_sorts_output_by_query():
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    grouped = {
+        "contig1": [
+            _rna_with_cds("geneB", "contig1", [(10, 20)]),
+            _rna_with_cds("geneA", "contig1", [(30, 40)]),
+        ]
+    }
+    depth, _ = gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
+    assert list(depth) == ["geneA", "geneB"]
 
 
 @pytest.mark.parametrize(
-    "contig, parts, message_fragment",
+    "contig, segment, message_fragment",
     [
-        ("contig1", [(10, 10)], "start (10) must be < end (10)"),
-        ("contig1", [(5, 15)], "end (15) exceeds contig length (10)"),
-        ("missing_contig", [(1, 5)], "not found in BAM references"),
+        ("contig1", (10, 10), "start (10) must be < end (10)"),
+        ("contig1", (5, 15), "end (15) exceeds contig length (10)"),
+        ("missing_contig", (1, 5), "not found in BAM references"),
     ],
 )
-def test_quantify_gene_coverage_edge_guards_raise_clean_value_errors(
-    contig, parts, message_fragment
-):
-    mock_bam = MockBam(
-        references=["contig1"], contig_lengths={"contig1": 10}, default_depth=5
-    )
-    genes = [Gene(gene_id="geneA", contig=contig, parts={"CDS": parts})]
-
+def test_quantify_edge_guards_raise_clean_value_errors(contig, segment, message_fragment):
+    bam = MockBam({"contig1": 10}, default_depth=5)
+    grouped = {contig: [_rna_with_cds("geneA", contig, [segment])]}
     with pytest.raises(ValueError, match=re.escape(message_fragment)):
-        gene_coverage.quantify_gene_coverage(
-            mock_bam, genes, min_depth=1, min_quality=0
-        )
+        gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
+
+
+def test_quantify_raises_on_negative_start():
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(-1, 5)])]}
+    with pytest.raises(ValueError, match=re.escape("start (-1) must be >= 0")):
+        gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
+
+
+# --------------------------------------------------------------------------- #
+# integration: GFF parse -> group -> quantify
+# --------------------------------------------------------------------------- #
+
+def test_gff_to_coverage_pipeline_with_mock_bam(tmp_path):
+    from theiagene.lib.parsers import assimilate_gff
+    from theiagene.lib.feature import extract_features
+
+    gff = tmp_path / "hier.gff"
+    gff.write_text(
+        "##gff-version 3\n"
+        "contig1\t.\tgene\t1\t40\t.\t+\t.\tID=gene-A\n"
+        "contig1\t.\tmRNA\t1\t40\t.\t+\t.\tID=rna-A;Parent=gene-A;product=geneA\n"
+        "contig1\t.\tCDS\t11\t20\t.\t+\t0\tID=cds-A;Parent=rna-A;product=geneA\n"
+    )
+    features_dict = assimilate_gff(str(gff))
+    # mirror run_cli's grouping step (default --group_by RNA)
+    grouped = {c: extract_features(v, "RNA") for c, v in features_dict.items()}
+
+    bam = MockBam({"contig1": 100}, default_depth=7)
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, grouped, min_depth=1)
+
+    # the RNA feature id is the reported query; CDS 1-based [11, 20] -> [10, 20)
+    assert depth == {"rna-A": 7.0}
+    assert coverage == {"rna-A": 100.0}
+
+
+def test_quantify_with_real_bam_counts_a_single_read(make_bam):
+    from theiagene.lib.parsers import import_bam
+
+    bam_path = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    imported = import_bam(bam_path)
+    grouped = {"contig1": [_rna_with_cds("geneA", "contig1", [(10, 20)])]}
+
+    depth, coverage = gene_coverage.quantify_gene_coverage(imported, grouped, min_depth=1)
+
+    # the single 50 bp read fully spans [10, 20) at depth 1
+    assert depth["geneA"] == 1.0
+    assert coverage["geneA"] == 100.0

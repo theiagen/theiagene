@@ -41,7 +41,7 @@ def match_query(query_list, identifiers, exact_match: bool):
     """Return the first query term (in order) matching any candidate identifier.
 
     Matching is normalization-aware, so dotted query names (e.g.
-    'lanosterol.14-alpha.demethylase') match spaced GBFF products
+    'lanosterol.14-alpha.demethylase') match spaced products
     ('lanosterol 14-alpha demethylase') and vice versa."""
     for query in query_list:
         nq = normalize_name(query)
