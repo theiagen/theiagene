@@ -47,6 +47,64 @@ def _as_strand(value):
     raise ValueError(f"strand is not a valid GFF3 strand: {value!r}")
 
 
+def _unescape_gff_attr(text: str) -> str:
+    """Reverse the percent-encoding applied by ``_format_gff_attributes``.
+
+    Escapes are undone in reverse of the encoding order so the '%25' -> '%' step
+    runs last and cannot corrupt an escape sequence produced by an earlier
+    replacement."""
+    for char, escape in reversed(_GFF_ATTR_ESCAPES):
+        text = text.replace(escape, char)
+    return text
+
+
+def _parse_gff_attributes(field: str) -> dict:
+    """Parse a raw GFF3 column-9 field into an ``{attribute: value}`` dict.
+
+    The field is split on ';' into ``key=value`` pairs; empty segments (from a
+    trailing or doubled ';') and bare tokens lacking '=' are skipped. Reserved
+    characters percent-encoded by ``_format_gff_attributes`` are decoded in both
+    key and value, and a later duplicate key overrides an earlier one. The
+    undefined placeholder ('.'/''/None) yields an empty dict."""
+    attributes = {}
+    if field in _UNDEFINED:
+        return attributes
+    for pair in field.split(";"):
+        if not pair:
+            continue
+        key, sep, value = pair.partition("=")
+        if not sep:
+            # a bare token with no '=' carries no value to record
+            continue
+        attributes[_unescape_gff_attr(key)] = _unescape_gff_attr(value)
+    return attributes
+
+
+def _escape_gff_attr(text: str) -> str:
+    """Percent-encode the GFF3 column-9 reserved characters in `text`.
+
+    Replacements run in the order of ``_GFF_ATTR_ESCAPES`` (with '%' first) so a
+    '%' introduced by an escape is not itself re-encoded; this is the exact
+    inverse of ``_unescape_gff_attr``."""
+    for char, escape in _GFF_ATTR_ESCAPES:
+        text = text.replace(char, escape)
+    return text
+
+
+def _format_gff_attributes(attributes: dict) -> str:
+    """Serialize an ``{attribute: value}`` dict into a GFF3 column-9 field.
+
+    Keys and values have their reserved characters percent-encoded and are
+    joined as ``key=value`` pairs separated by ';'. A key whose value is None is
+    skipped, and an empty result yields the '.' placeholder."""
+    pairs = []
+    for key, value in attributes.items():
+        if value is None:
+            continue
+        pairs.append(f"{_escape_gff_attr(str(key))}={_escape_gff_attr(str(value))}")
+    return ";".join(pairs) if pairs else "."
+
+
 class Feature:
     """A single cross-annotation feature
     `start` and `end` are sorted by smallest to largest and are expected to be 0-based half-open upon input"""
