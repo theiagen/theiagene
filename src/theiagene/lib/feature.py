@@ -218,7 +218,7 @@ def group_features(features: list, parent_ids: list = ["Parent", "parent"], ids:
     for feature in features:
         fid = _attr_get(feature.attributes, ids)
         if fid in id2feature:
-            forbidden = forbidden.add(fid)
+            forbidden.add(fid)
             # make the ID unique by appending a count
             while fid in id2feature:
                 id_counts[fid] += 1
