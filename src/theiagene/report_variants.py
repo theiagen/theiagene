@@ -8,6 +8,11 @@ strings to that product name, e.g.::
 
     lanosterol.14-alpha.demethylase: lanosterol 14-alpha demethylase (missense_variant c.428A>G p.Lys143Arg)
 
+When the source VCF is supplied via ``--vcf``, each line also carries
+the variant's per-allele read depths, e.g.::
+
+    lanosterol.14-alpha.demethylase: lanosterol 14-alpha demethylase (missense_variant c.428A>G p.Lys143Arg; T:0 C:562)
+
 Rows carrying neither an HGVSc nor an HGVSp string are ignored for now."""
 
 import sys
@@ -15,7 +20,7 @@ import logging
 import argparse
 
 from theiagene.lib.feature import FeatureCol
-from theiagene.lib.parsers import assimilate_gff
+from theiagene.lib.parsers import assimilate_gff, import_vcf
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -52,6 +57,86 @@ def parse_vep_tsv(vep_tsv: str):
             if columns is None:
                 raise ValueError(f"no column header found before data in {vep_tsv}")
             yield dict(zip(columns, line.split("\t")))
+
+
+def _allele_depths(sample):
+    """Return ``(ref_depth, [alt_depth, ...])`` for a VCF record's single sample,
+    or None when the record carries no per-allele read counts.
+
+    FreeBayes writes these as the ``AD`` FORMAT field (``ref, alt1, alt2, ...``);
+    if ``AD`` is absent it falls back to the ``RO`` (reference-observation) and
+    ``AO`` (alternate-observation) fields. gVCF reference blocks carry neither and
+    yield None."""
+    ad = sample.get("AD")
+    if ad:
+        return ad[0], list(ad[1:])
+    ro = sample.get("RO")
+    ao = sample.get("AO")
+    if ro is not None and ao is not None:
+        ao = ao if isinstance(ao, (tuple, list)) else (ao,)
+        return ro, list(ao)
+    return None
+
+
+def build_depth_index(vcf: str) -> dict:
+    """Map each VCF record's raw ``(contig, pos, ref)`` to its per-allele depths.
+
+    The value is ``(ref_depth, {alt: alt_depth})``. Keying on the *raw*
+    (unnormalized) coordinates is deliberate: VEP echoes exactly these back in its
+    ``Uploaded_variation`` column (``contig_pos_ref/alt``), so a report row can be
+    matched to its source record without redoing VEP's allele normalization.
+    Records without per-allele depths (e.g. gVCF reference blocks) are skipped."""
+    index = {}
+    handle = import_vcf(vcf)
+    try:
+        for record in handle:
+            sample = next(iter(record.samples.values()), None)
+            if sample is None:
+                continue
+            depths = _allele_depths(sample)
+            if depths is None:
+                continue
+            ref_depth, alt_depths = depths
+            alts = record.alts or ()
+            index[(record.contig, record.pos, record.ref)] = (
+                ref_depth,
+                dict(zip(alts, alt_depths)),
+            )
+    finally:
+        handle.close()
+    return index
+
+
+def _depth_suffix(row: dict, depth_index: dict):
+    """Render ``"{ref}:{ref_depth} {alt}:{alt_depth}"`` for a VEP row, or None when
+    the row's variant is absent from ``depth_index`` or its allele can't be
+    resolved.
+
+    ``Uploaded_variation`` is ``contig_pos_ref/alt[,alt...]`` in VEP's raw input
+    coordinates; the contig/pos/ref triple keys the index and the row's ``Allele``
+    (falling back to the sole alt of a biallelic site) picks which alt's depth to
+    report."""
+    uploaded = row.get("Uploaded_variation", "")
+    try:
+        rest, _alts = uploaded.rsplit("/", 1)
+        prefix, ref = rest.rsplit("_", 1)
+        contig, pos = prefix.rsplit("_", 1)
+        pos = int(pos)
+    except ValueError:
+        return None
+    entry = depth_index.get((contig, pos, ref))
+    if entry is None:
+        return None
+    ref_depth, alt_depths = entry
+    allele = row.get("Allele")
+    if allele in alt_depths:
+        alt = allele
+    elif len(alt_depths) == 1:
+        alt = next(iter(alt_depths))
+    else:
+        # can't disambiguate which alt of a multiallelic site this row is about
+        return None
+    return f"{ref}:{ref_depth} {alt}:{alt_depths[alt]}"
 
 
 def _consequences(row: dict) -> list:
@@ -94,12 +179,14 @@ def _hgvs_suffix(value: str, strip_parens: bool = False):
     return suffix
 
 
-def report_line(row: dict, product: str) -> str:
+def report_line(row: dict, product: str, depth_index: dict = None) -> str:
     """Build the product-named report line for a single kept VEP row.
 
     The transcript/protein prefixes of HGVSc/HGVSp are translated to ``product``
     (spaces -> '.') and factored out as a shared label; the consequence and the
-    surviving HGVS suffixes follow in parentheses."""
+    surviving HGVS suffixes follow in parentheses. When ``depth_index`` is given
+    and the row's variant resolves in it, the per-allele read depths are appended
+    after a ``;`` (e.g. ``... p.Lys143Arg; T:0 C:562``)."""
     dotted = product.replace(" ", ".")
     consequence = row.get("Consequence", "")
     pieces = [consequence]
@@ -109,9 +196,12 @@ def report_line(row: dict, product: str) -> str:
         pieces.append(hgvsc)
     if hgvsp:
         pieces.append(hgvsp)
-    # TODO: append the per-allele read depths (e.g. "; C:499 T:0") once the
-    # source VCF is threaded into this command; the VEP TSV does not carry them.
-    return f"{dotted}: {product} ({' '.join(pieces)})"
+    body = " ".join(pieces)
+    if depth_index is not None:
+        depths = _depth_suffix(row, depth_index)
+        if depths:
+            body += f"; {depths}"
+    return f"{dotted}: {product} ({body})"
 
 
 def report_variants(
@@ -120,12 +210,15 @@ def report_variants(
     suppress: set,
     feature_type: str,
     qualifiers: list,
+    depth_index: dict = None,
 ) -> list:
     """Turn a VEP TSV into product-named report lines.
 
     A row is dropped when any of its consequence terms is suppressed, when it
     carries neither an HGVSc nor an HGVSp string, or when its ``Feature`` cannot
-    be resolved to a CDS product in ``features``."""
+    be resolved to a CDS product in ``features``. When ``depth_index`` is given
+    (see :func:`build_depth_index`), each kept line carries the variant's
+    per-allele read depths."""
     lines = []
     for row in parse_vep_tsv(vep_tsv):
         if any(consequence in suppress for consequence in _consequences(row)):
@@ -141,7 +234,7 @@ def report_variants(
                 f"{feature_id!r}; skipping variant {row.get('Uploaded_variation')}"
             )
             continue
-        lines.append(report_line(row, product))
+        lines.append(report_line(row, product, depth_index))
     return lines
 
 
@@ -149,6 +242,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """Register the report_variants arguments on ``parser``"""
     parser.add_argument("--vep_tsv", required=True)
     parser.add_argument("--reference_gff", required=True)
+    parser.add_argument(
+        "--vcf",
+        help="VCF the VEP annotations were called from; when given, each report "
+        "line carries the variant's per-allele read depths (e.g. 'T:0 C:562')",
+    )
     parser.add_argument(
         "--suppress",
         default="intergenic_variant,coding_sequence_variant",
@@ -173,9 +271,10 @@ def run_cli(args: argparse.Namespace) -> int:
     features = assimilate_gff(args.reference_gff)
     suppress = set(_split_qualifiers(args.suppress))
     qualifiers = _split_qualifiers(args.feature_qualifier)
+    depth_index = build_depth_index(args.vcf) if args.vcf else None
 
     lines = report_variants(
-        args.vep_tsv, features, suppress, args.feature_type, qualifiers
+        args.vep_tsv, features, suppress, args.feature_type, qualifiers, depth_index
     )
 
     if args.output:

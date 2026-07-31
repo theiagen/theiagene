@@ -88,8 +88,12 @@ def format_gff_attributes(attributes: dict, field_delimiter: str = ";", value_de
 
 
 def iter_gff_features(reference_gff: str):
-    """Yield a Feature class from a GFF3 file."""
-    with open(reference_gff) as handle:
+    """Yield a Feature class from a GFF3 file.
+
+    A ``.gz`` suffix routes the file through ``gzip`` (text mode), so a compressed
+    GFF3 enters the same parsing loop as a plain-text one."""
+    opener = gzip.open if reference_gff.endswith(".gz") else open
+    with opener(reference_gff, "rt") as handle:
         for line in handle:
             line = line.rstrip("\n")
             # a '##FASTA' directive ends the annotation section
