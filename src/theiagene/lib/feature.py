@@ -1,6 +1,6 @@
 """Feature/gene data model shared by the theiagene commands."""
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 # GFF strand column -> BioPython-style strand integer ('.'/'?' -> None)
 _STRAND = {"+": 1, "-": -1}
@@ -213,16 +213,27 @@ def _attr_get(attributes: dict, keys):
 def group_features(features: list, parent_ids: list = ["Parent", "parent"], ids: list = ["ID", "Id", "id"]):
     """Hierarchically group features based on Parent <-> ID relationships"""
     id2feature = {}
+    id_counts = Counter()
+    forbidden = set()
     for feature in features:
         fid = _attr_get(feature.attributes, ids)
         if fid in id2feature:
-            raise KeyError(f"{fid} is depicted in multiple Features")
+            forbidden = forbidden.add(fid)
+            while fid in id2feature:
+                id_counts[fid] += 1
+                fid = f"{fid}_{id_counts[fid]}"
+            for id_ in ids:
+                if id_ in feature.attributes:
+                    feature.attributes[id_] = fid
         id2feature[fid] = feature
 
     feature_dict = defaultdict(list)
     for fid, feature in id2feature.items():
         par_id = _attr_get(feature.attributes, parent_ids)
         if par_id:
+            # cannot dereplicate
+            if par_id in forbidden:
+                raise KeyError(f"parent ID {par_id} belongs to multiple features")
             # link features together
             id2feature[par_id].descendants.append(feature)
             feature.parent = id2feature[par_id]
