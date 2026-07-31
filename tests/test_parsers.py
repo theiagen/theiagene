@@ -96,6 +96,22 @@ def test_iter_gff_features_skips_comments_blanks_and_fasta(tmp_path):
     assert [f.fid for f in feats] == ["a"]
 
 
+def test_iter_gff_features_reads_gzipped_gff(tmp_path):
+    import gzip
+
+    path = tmp_path / "f.gff.gz"
+    with gzip.open(path, "wt") as handle:
+        handle.write(
+            "##gff-version 3\n"
+            "# a comment\n"
+            "chr1\t.\tCDS\t10\t33\t.\t+\t0\tID=a\n"
+            "chr2\t.\tCDS\t6\t17\t.\t-\t0\tID=b\n"
+        )
+    # a .gz suffix enters the same parsing loop as a plain-text GFF
+    feats = list(parsers.iter_gff_features(str(path)))
+    assert [f.fid for f in feats] == ["a", "b"]
+
+
 def test_iter_gff_features_raises_on_wrong_field_count(tmp_path):
     path = tmp_path / "bad.gff"
     path.write_text("chr1\t.\tCDS\t10\t33\t.\t+\n")  # 7 columns, not 9
