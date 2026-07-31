@@ -249,7 +249,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--suppress",
-        default="intergenic_variant,coding_sequence_variant",
         help="comma-/space-delimited consequence type(s) whose rows are dropped",
     )
     parser.add_argument(
