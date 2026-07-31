@@ -16,6 +16,37 @@ _GFF_ATTR_ESCAPES = (
     ("\t", "%09"), ("\n", "%0A"), ("\r", "%0D"),
 )
 
+
+def _as_int(value, name="value"):
+    """Coerce a GFF3 numeric column to an int, or None for an undefined
+    ('.'/'?'/''/None) column.
+
+    A value already of int type is returned unchanged. `name` labels the column
+    in the error raised when a defined value cannot be parsed as an int."""
+    if isinstance(value, int):
+        return value
+    if value in _UNDEFINED:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} is not an integer: {value!r}")
+
+
+def _as_strand(value):
+    """Coerce a GFF3 strand column ('+'/'-') to a BioPython-style strand integer
+    (1/-1), or None for an undefined ('.'/'?'/''/None) strand.
+
+    A value already given as a strand integer (1/-1) is returned unchanged."""
+    if value in _STRAND:
+        return _STRAND[value]
+    if value in (1, -1):
+        return value
+    if value in _UNDEFINED:
+        return None
+    raise ValueError(f"strand is not a valid GFF3 strand: {value!r}")
+
+
 class Feature:
     """A single cross-annotation feature
     `start` and `end` are sorted by smallest to largest and are expected to be 0-based half-open upon input"""
