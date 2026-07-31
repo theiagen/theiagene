@@ -43,24 +43,31 @@ def _iter_descendants(feature):
         yield from _iter_descendants(descendant)
 
 
-def feature_identifiers(feature) -> list:
+def _split_qualifiers(raw: str) -> list:
+    """Split a comma-/space-delimited qualifier string into individual keys,
+    dropping empty tokens."""
+    return raw.replace(",", " ").split()
+
+
+def feature_identifiers(feature, qualifiers) -> list:
     """Collect the candidate name strings a query term may match against.
 
     A gene can be named on the query feature itself, on its parent (the gene
     record usually carries ``gene``/``Name``) or on its CDS descendants (which
     usually carry ``product``); every such identifier is gathered so a query
-    matches regardless of which record holds the name."""
+    matches regardless of which record holds the name. The attribute keys to
+    read are supplied by ``qualifiers`` and matched case-insensitively."""
     identifiers = []
     related = [feature]
     if feature.parent is not None:
         related.append(feature.parent)
     related.extend(_iter_descendants(feature))
+    wanted = {qualifier.lower() for qualifier in qualifiers}
     for related_feature in related:
         if related_feature.fid:
             identifiers.append(related_feature.fid)
-        for key in ("Name", "gene", "product", "locus_tag", "Alias"):
-            value = related_feature.attributes.get(key)
-            if value:
+        for key, value in related_feature.attributes.items():
+            if value and key.lower() in wanted:
                 identifiers.append(value)
     return identifiers
 
@@ -80,6 +87,7 @@ def gff_query_ranges(
     query_list: list,
     group_by: str,
     feature_type: str,
+    feature_qualifiers: list,
     exact_match: bool,
 ) -> dict:
     """Flatten the ``feature_type`` coordinates of the selected query genes to
@@ -92,7 +100,9 @@ def gff_query_ranges(
     contig2ranges = defaultdict(list)
     for feature in features[group_by]:
         if query_list:
-            label = match_query(query_list, feature_identifiers(feature), exact_match)
+            label = match_query(
+                query_list, feature_identifiers(feature, feature_qualifiers), exact_match
+            )
             if label is None:
                 continue
         else:
@@ -195,6 +205,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--reference_gff")
     parser.add_argument("--group_by", default="RNA")
     parser.add_argument("--feature_type", default="CDS")
+    parser.add_argument(
+        "--feature_qualifier",
+        default="Name,gene,product,locus_tag,Alias",
+        help="comma-/space-delimited attribute key(s), matched case-insensitively, "
+        "used to collect query-gene name candidates",
+    )
     parser.add_argument("--exact_match", action="store_true")
     parser.add_argument("--ambiguous_contig", action="store_true")
     parser.add_argument("--output", default="EXTRACTED_VARIANTS.vcf")
@@ -218,8 +234,14 @@ def run_cli(args: argparse.Namespace) -> int:
     # build query coordinates from whichever source is authoritative
     if args.reference_gff:
         features = assimilate_gff(args.reference_gff)
+        feature_qualifiers = _split_qualifiers(args.feature_qualifier)
         contig2ranges = gff_query_ranges(
-            features, query_list, args.group_by, args.feature_type, args.exact_match
+            features,
+            query_list,
+            args.group_by,
+            args.feature_type,
+            feature_qualifiers,
+            args.exact_match,
         )
     else:
         contig2ranges = bed_query_ranges(args.bedfile, set(query_list))
