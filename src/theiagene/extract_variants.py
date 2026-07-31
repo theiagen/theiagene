@@ -28,9 +28,7 @@ logger = logging.getLogger(__name__)
 
 def input_error_handling(args: argparse.Namespace) -> None:
     """Handle incompatible input arguments"""
-    if not args.bedfile and not args.reference_gff:
-        raise FileNotFoundError("'reference_gff' or 'bedfile' is required")
-    elif not args.query_genes and not args.bedfile:
+    if not args.query_genes and not args.bedfile:
         raise ValueError("'query_genes' or 'bedfile' required")
 
 
