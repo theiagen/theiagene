@@ -21,6 +21,7 @@ import argparse
 
 from theiagene.lib.feature import FeatureCol
 from theiagene.lib.parsers import assimilate_gff, import_vcf
+from theiagene.lib.query import split_qualifiers
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -28,12 +29,6 @@ logger = logging.getLogger(__name__)
 
 # VEP's undefined-column placeholder
 _UNDEFINED = {"-", "", "."}
-
-
-def _split_qualifiers(raw: str) -> list:
-    """Split a comma-/space-delimited qualifier string into individual keys,
-    dropping empty tokens."""
-    return raw.replace(",", " ").split()
 
 
 def parse_vep_tsv(vep_tsv: str):
@@ -268,8 +263,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
 def run_cli(args: argparse.Namespace) -> int:
     """Render the VEP annotations into product-named report lines"""
     features = assimilate_gff(args.reference_gff)
-    suppress = set(_split_qualifiers(args.suppress))
-    qualifiers = _split_qualifiers(args.feature_qualifier)
+    suppress = set(split_qualifiers(args.suppress))
+    qualifiers = split_qualifiers(args.feature_qualifier)
     depth_index = build_depth_index(args.vcf) if args.vcf else None
 
     lines = report_variants(

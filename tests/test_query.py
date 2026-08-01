@@ -62,3 +62,12 @@ def test_ordered_query_genes_flattens_and_dedupes():
     assert query.ordered_query_genes([]) == []
     # blank chunks are dropped
     assert query.ordered_query_genes(["a,,b", " "]) == ["a", "b"]
+
+
+def test_split_qualifiers_splits_on_commas_and_spaces():
+    assert query.split_qualifiers("product,gene Name") == ["product", "gene", "Name"]
+    # empty tokens from doubled/leading delimiters are dropped
+    assert query.split_qualifiers(" ,product, ") == ["product"]
+    # a None/empty input (e.g. an unset --suppress) yields an empty list
+    assert query.split_qualifiers(None) == []
+    assert query.split_qualifiers("") == []

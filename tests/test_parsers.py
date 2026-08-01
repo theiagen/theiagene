@@ -78,7 +78,9 @@ def test_iter_gff_features_yields_features_with_converted_coordinates(tmp_path):
     assert (first.seqid, first.start, first.end, first.strand) == ("chr1", 9, 33, 1)
     # ID / Parent are lifted onto fid / pid and removed from the attribute dict
     assert first.fid == "a" and first.pid == "p"
-    assert first.attributes == {"product": "alpha"}
+    # ID / Parent are lifted onto fid / pid but retained in the attribute dict so
+    # group_features can keep them in sync when it deduplicates a repeated id
+    assert first.attributes == {"ID": "a", "Parent": "p", "product": "alpha"}
     assert feats[1].strand == -1 and feats[1].pid is None
 
 
@@ -122,7 +124,7 @@ def test_iter_gff_features_raises_on_wrong_field_count(tmp_path):
 def test_iter_gff_features_raises_when_id_missing(tmp_path):
     path = tmp_path / "noid.gff"
     path.write_text("chr1\t.\tCDS\t10\t33\t.\t+\t0\tproduct=alpha\n")
-    with pytest.raises(ValueError, match="found in record attributes"):
+    with pytest.raises(AttributeError, match="No ID obtained for feature"):
         list(parsers.iter_gff_features(str(path)))
 
 
@@ -138,10 +140,11 @@ def test_assimilate_gff_groups_cds_under_its_rna_and_gene(tmp_path):
         "chr1\t.\tmRNA\t1\t30\t.\t+\t.\tID=rna-A;Parent=gene-A;product=geneA\n"
         "chr1\t.\tCDS\t5\t25\t.\t+\t0\tID=cds-A;Parent=rna-A;product=geneA\n"
     )
-    grouped = parsers.assimilate_gff(str(path))
-    assert set(grouped) == {"chr1"}
-    by_id = {f.fid: f for f in grouped["chr1"]}
-    rna = by_id["rna-A"]
+    # assimilate_gff returns a FeatureCol with the parent/descendant hierarchy wired up
+    features = parsers.assimilate_gff(str(path))
+    assert {f.fid for f in features["gene"]} == {"gene-A"}
+    assert {f.fid for f in features["rna"]} == {"rna-A"}
+    rna = features.by_id("rna-A")
     assert rna.parent.fid == "gene-A"
     # the CDS is a descendant of the mRNA, 1-based [5, 25] -> 0-based [4, 25)
     cds = rna.descendants[0]

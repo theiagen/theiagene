@@ -1,22 +1,35 @@
 """Quantify breadth and depth of coverage over query genes.
 
-Given a BAM and query-gene coordinates (from a reference GBFF/GFF or a BED
-file), this command reports the average depth and percent coverage of each
-query gene as JSON (``DEPTH_DICT.json``, ``COVERAGE_DICT.json``) and a readable
-``COVERAGE_STATS.tsv``."""
+Given a BAM and query-gene coordinates (from a reference GFF or a BED file),
+this command reports the average depth and percent coverage of each query gene
+as JSON (``DEPTH_DICT.json``, ``COVERAGE_DICT.json``) and a readable
+``COVERAGE_STATS.tsv``.
+
+Query genes are selected from the GFF by matching ``--query_genes`` (or the BED
+names) against each candidate feature's identifiers -- the ``--feature_qualifier``
+attribute(s) (default ``product``) plus the feature/parent/descendant ids -- and
+depth/coverage are compiled from the matched unit's ``--feature_type`` (default
+``CDS``) segments."""
 
 import sys
 import logging
 import argparse
+from collections import defaultdict
 
 import pysam
 
-from theiagene.lib.query import extract_queries_from_bed
-from theiagene.lib.feature import FeatureCol
 from theiagene.lib.parsers import (
     write_json,
     import_bam,
     assimilate_gff,
+)
+from theiagene.lib.query import (
+    ordered_query_genes,
+    extract_queries_from_bed,
+    split_qualifiers,
+    gff_query_ranges,
+    bed_query_ranges,
+    collapse_to_single_contig,
 )
 from theiagene.lib.logging_config import configure_logging
 
@@ -26,57 +39,44 @@ logger = logging.getLogger(__name__)
 
 def input_error_handling(args: argparse.Namespace) -> None:
     """Handle incompatible input arguments"""
-    if not args.bedfile and not args.reference_gbff and not args.reference_gff:
-        raise FileNotFoundError(
-            "'reference_gbff', 'reference_gff', or 'bedfile' is required"
-        )
+    if not args.bedfile and not args.reference_gff:
+        raise FileNotFoundError("'reference_gff' or 'bedfile' is required for coordinates")
     elif not args.query_genes and not args.bedfile:
         raise ValueError("'query_genes' or 'bedfile' required")
 
 
 def quantify_gene_coverage(
     imported_bam: pysam.AlignmentFile,
-    query_features: list,
-    feature_type: str = "CDS",
+    contig2ranges: dict,
     min_depth: int = 1,
     min_quality: int = 0,
 ) -> tuple:
-    """Quantify gene breadth and depth of coverage over a list of query Features.
+    """Quantify breadth and depth of coverage over query-gene coordinates.
 
-    Each Feature in ``query_features`` is a query unit (the ``group_by`` class,
-    e.g. an RNA); breadth/depth are compiled from its ``feature_type`` (e.g. CDS)
-    descendant segments. The contig is read from each Feature's ``seqid``."""
-    depth_dict = {}
-    coverage_dict = {}
+    ``contig2ranges`` maps each contig to ``[(START, END, LABEL), ...]`` (0-based,
+    half-open) as produced by :func:`gff_query_ranges`/:func:`bed_query_ranges`;
+    every range sharing a ``LABEL`` (e.g. all CDS segments of one query gene) is
+    pooled, so a query that matches multiple units is summarised on one row."""
     reference_names = set(imported_bam.references)
+    label_depths = defaultdict(list)
+    label_coverages = defaultdict(list)
 
-    for feature in query_features:
-        contig = feature.seqid
+    for contig, ranges in contig2ranges.items():
         if contig not in reference_names:
             raise ValueError(f"Contig '{contig}' not found in BAM references")
         contig_len = imported_bam.get_reference_length(contig)
-        query = feature.fid
-        if query in depth_dict:
-            logger.warning(
-                f"{query} is present on multiple contigs and will be overwritten"
-            )
-        # check coverage data across range
-        depths = []
-        coverages = []
-        # only the requested-type subfeatures beneath this query feature
-        for subfeature in FeatureCol(feature.descendants, group=False)[feature_type]:
-            start, end = subfeature.start, subfeature.end
+        for start, end, label in ranges:
             if end <= start:
                 raise ValueError(
-                    f"Invalid region for query '{query}' on contig '{contig}': start ({start}) must be < end ({end})"
+                    f"Invalid region for query '{label}' on contig '{contig}': start ({start}) must be < end ({end})"
                 )
             if start < 0:
                 raise ValueError(
-                    f"Invalid region for query '{query}' on contig '{contig}': start ({start}) must be >= 0"
+                    f"Invalid region for query '{label}' on contig '{contig}': start ({start}) must be >= 0"
                 )
             if end > contig_len:
                 raise ValueError(
-                    f"Invalid region for query '{query}' on contig '{contig}': end ({end}) exceeds contig length ({contig_len})"
+                    f"Invalid region for query '{label}' on contig '{contig}': end ({end}) exceeds contig length ({contig_len})"
                 )
             coverage_data = imported_bam.count_coverage(
                 contig, start, end, quality_threshold=min_quality
@@ -90,15 +90,16 @@ def quantify_gene_coverage(
                     + coverage_data[3][i]
                 )
                 # base is considered covered if beyond minimum depth
-                coverages.append(total_depth >= min_depth)
-                depths.append(total_depth)
-        if not depths:
-            raise ValueError(
-                f"No positions evaluated for query '{query}' on contig '{contig}'"
-            )
-        depth_dict[query] = sum(depths) / len(depths)
+                label_coverages[label].append(total_depth >= min_depth)
+                label_depths[label].append(total_depth)
+
+    depth_dict = {}
+    coverage_dict = {}
+    for label, depths in label_depths.items():
+        depth_dict[label] = sum(depths) / len(depths)
+        coverages = label_coverages[label]
         # breadth is percent of covered bases exceeding min_depth
-        coverage_dict[query] = 100 * (sum(coverages) / len(coverages))
+        coverage_dict[label] = 100 * (sum(coverages) / len(coverages))
 
     return dict(sorted(depth_dict.items())), dict(sorted(coverage_dict.items()))
 
@@ -119,11 +120,17 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """Register the gene_coverage arguments on ``parser``"""
     parser.add_argument("--bam", required=True)
     parser.add_argument("--bedfile")
-    parser.add_argument("--reference_gff", required=True)
+    parser.add_argument("--reference_gff")
     parser.add_argument("--query_genes", nargs="+")
     parser.add_argument("--group_by", default="RNA")
     parser.add_argument("--feature_type", default="CDS")
-    parser.add_argument("--exact_match", default=False)
+    parser.add_argument(
+        "--feature_qualifier",
+        default="product",
+        help="comma-/space-delimited attribute key(s), matched case-insensitively, "
+        "used to collect query-gene name candidates",
+    )
+    parser.add_argument("--exact_match", action="store_true")
     parser.add_argument("--ambiguous_contig", action="store_true")
     parser.add_argument("--min_depth", type=int, default=1)
     parser.add_argument("--min_quality", type=int, default=0)
@@ -132,46 +139,52 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
 
 def run_cli(args: argparse.Namespace) -> int:
     """Execute the gene_coverage pipeline and write output files"""
-    # error parsing
     input_error_handling(args)
 
-    # import queries
+    # import queries: explicit --query_genes take precedence over BED names
     if args.query_genes:
-        query_set = set()
-        for queries in args.query_genes:
-            query_set = query_set.union(q.strip() for q in queries.split(","))
+        query_list = ordered_query_genes(args.query_genes)
+    elif args.reference_gff:
+        # BED supplies the query names when it is not the coordinate source
+        query_list = sorted(extract_queries_from_bed(args.bedfile))
     else:
-        query_set = extract_queries_from_bed(args.bedfile)
+        # BED is itself the coordinate source; every row is a query
+        query_list = []
+
+    # build query coordinates from whichever source is authoritative
+    if args.reference_gff:
+        features = assimilate_gff(args.reference_gff)
+        feature_qualifiers = split_qualifiers(args.feature_qualifier)
+        contig2ranges = gff_query_ranges(
+            features,
+            query_list,
+            args.group_by,
+            args.feature_type,
+            feature_qualifiers,
+            args.exact_match,
+        )
+    else:
+        contig2ranges = bed_query_ranges(args.bedfile, set(query_list))
+
+    if not contig2ranges:
+        logger.warning("No query-gene coordinates were resolved from the inputs")
 
     # import BAM and modify contig coordinates if needed
     imported_bam = import_bam(args.bam)
 
-    # convert GFF into a FeatureCol (parent/descendant hierarchy wired up)
-    features = assimilate_gff(args.reference_gff)
-
-    contig_names = set(imported_bam.references)
     if args.ambiguous_contig:
-        # can't apply ambiguous contig approach if there are multiple contigs
-        gff_contigs = {feature.seqid for feature in features}
-        if len(contig_names) > 1:
+        # can't apply the ambiguous-contig approach with multiple contigs
+        bam_contigs = imported_bam.references
+        if len(bam_contigs) > 1:
             raise ValueError(
                 "can't use ambiguous_contig coordinates when there are multiple contigs in the BAM"
             )
-        if len(gff_contigs) > 1:
-            raise ValueError(
-                "can't use ambiguous_contig coordinates when there are multiple contigs in the GFF"
-            )
-        # reassign every feature to the single BAM contig
-        only_contig = imported_bam.references[0]
-        for feature in features:
-            feature.seqid = only_contig
-
-    # the group_by features (e.g. each RNA) are the query units
-    query_features = features[args.group_by]
+        # re-file every query range under the single BAM contig
+        contig2ranges = collapse_to_single_contig(contig2ranges, bam_contigs[0])
 
     # quantify statistics and write
     depth_dict, coverage_dict = quantify_gene_coverage(
-        imported_bam, query_features, args.feature_type, args.min_depth, args.min_quality
+        imported_bam, contig2ranges, args.min_depth, args.min_quality
     )
     write_json("DEPTH_DICT.json", depth_dict)
     write_json("COVERAGE_DICT.json", coverage_dict)

@@ -4,11 +4,11 @@ import pytest
 
 from theiagene.lib.feature import (
     Feature,
+    FeatureCol,
     group_features,
-    extract_features,
     _as_int,
     _as_strand,
-    _gff_escape,
+    _escape_gff_attr,
     _format_gff_attributes,
 )
 
@@ -26,7 +26,7 @@ def test_as_int_maps_undefined_to_none_and_parses_digits():
 
 
 def test_as_int_raises_on_non_numeric():
-    with pytest.raises(ValueError, match="start must be an integer"):
+    with pytest.raises(ValueError, match="start is not an integer"):
         _as_int("abc", "start")
 
 
@@ -39,7 +39,7 @@ def test_as_strand_coerces_all_accepted_forms(value, expected):
 
 
 def test_as_strand_rejects_unknown_token():
-    with pytest.raises(ValueError, match="strand must be one of"):
+    with pytest.raises(ValueError, match="strand is not a valid GFF3 strand"):
         _as_strand("x")
 
 
@@ -62,8 +62,8 @@ def test_feature_sorts_coordinates_and_coerces_columns():
 
 def test_feature_defaults_are_not_shared_between_instances():
     # attributes/descendants must be per-instance, else the hierarchy collapses
-    a = Feature(fid="a")
-    b = Feature(fid="b")
+    a = Feature(fid="a", start=0, end=6)
+    b = Feature(fid="b", start=0, end=6)
     a.attributes["k"] = "v"
     a.descendants.append(b)
     assert b.attributes == {}
@@ -76,8 +76,8 @@ def test_feature_defaults_are_not_shared_between_instances():
 
 def test_gff_escape_percent_encodes_reserved_first():
     # '%' is encoded first so later escapes are not themselves re-encoded
-    assert _gff_escape("a=b;c,d") == "a%3Db%3Bc%2Cd"
-    assert _gff_escape("100%") == "100%25"
+    assert _escape_gff_attr("a=b;c,d") == "a%3Db%3Bc%2Cd"
+    assert _escape_gff_attr("100%") == "100%25"
 
 
 def test_format_gff_attributes_roundtrips_and_handles_empty():
@@ -122,7 +122,13 @@ def test_to_gff_emits_descendants_depth_first():
 # --------------------------------------------------------------------------- #
 
 def _feat(fid, type, pid=None, seqid="chr1"):
-    return Feature(fid=fid, pid=pid, seqid=seqid, type=type, start=0, end=6)
+    # group_features keys off the ID/Parent attributes (as real GFF records carry
+    # them), so mirror that here rather than relying on the fid/pid arguments alone
+    attributes = {"ID": fid}
+    if pid:
+        attributes["Parent"] = pid
+    return Feature(fid=fid, pid=pid, seqid=seqid, type=type, start=0, end=6,
+                   attributes=attributes)
 
 
 def test_group_features_wires_parent_and_descendant_links():
@@ -147,15 +153,26 @@ def test_group_features_keys_contigs_separately():
     assert [f.fid for f in grouped["chr2"]] == ["gene-B"]
 
 
-def test_group_features_rejects_duplicate_ids():
-    with pytest.raises(KeyError, match="dup"):
-        group_features([_feat("dup", "gene"), _feat("dup", "gene")])
+def test_group_features_dedupes_duplicate_ids():
+    # a repeated id with nobody referencing it as a parent is made unique, not rejected
+    grouped = group_features([_feat("dup", "gene"), _feat("dup", "gene")])
+    assert {f.fid for f in grouped["chr1"]} == {"dup", "dup_1"}
 
 
-def test_extract_features_substring_vs_exact():
+def test_group_features_rejects_ambiguous_parent_id():
+    # 'dup' names two features *and* is referenced as a Parent -> the link is ambiguous
+    feats = [_feat("dup", "gene"), _feat("dup", "gene"), _feat("kid", "CDS", pid="dup")]
+    with pytest.raises(KeyError, match="belongs to multiple features"):
+        group_features(feats)
+
+
+def test_featurecol_buckets_features_by_canonical_class():
     feats = [_feat("a", "mRNA"), _feat("b", "CDS"), _feat("c", "ncRNA")]
-    # substring: "RNA" matches both mRNA and ncRNA
-    assert {f.fid for f in extract_features(feats, "RNA")} == {"a", "c"}
-    # exact: only a literal type match
-    assert [f.fid for f in extract_features(feats, "mRNA", exact_match=True)] == ["a"]
-    assert extract_features(feats, "exon") == []
+    # unrelated features (no Parent/ID links); skip grouping
+    fl = FeatureCol(feats, group=False)
+    # any *rna type collapses to the 'rna' class, keyed by class name or a raw type
+    assert {f.fid for f in fl["rna"]} == {"a", "c"}
+    assert {f.fid for f in fl["mRNA"]} == {"a", "c"}
+    assert [f.fid for f in fl["cds"]] == ["b"]
+    # a class with no members is empty
+    assert fl["exon"] == []
