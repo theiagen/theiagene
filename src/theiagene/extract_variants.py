@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 def input_error_handling(args: argparse.Namespace) -> None:
     """Handle incompatible input arguments"""
     if not args.bedfile and not args.reference_gff:
-        raise FileNotFoundError("'reference_gff' or 'bedfile' is required for coordinates")
-    elif not args.query_genes and not args.bedfile:
+        raise ValueError("'reference_gff' or 'bedfile' is required for coordinates")
+    if not args.query_genes and not args.bedfile:
         raise ValueError("'query_genes' or 'bedfile' required")
 
 
@@ -134,6 +134,10 @@ def run_cli(args: argparse.Namespace) -> int:
             raise ValueError(
                 "can't use ambiguous_contig coordinates when there are multiple "
                 "contigs in the VCF"
+            )
+        elif not vcf_contigs:
+            raise ValueError(
+                "no contigs to extract from VCF"
             )
         contig_ranges = {tuple(r) for ranges in contig2ranges.values() for r in ranges}
         contig2ranges = collapse_to_single_contig(

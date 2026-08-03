@@ -42,7 +42,7 @@ def input_error_handling(args: argparse.Namespace) -> None:
     if not args.bedfile and not args.reference_gff:
         raise FileNotFoundError("'reference_gff' or 'bedfile' is required for coordinates")
     elif not args.query_genes and not args.bedfile:
-        raise ValueError("'query_genes' or 'bedfile' required")
+        raise FileNotFoundError("'query_genes' or 'bedfile' required")
 
 
 def quantify_gene_coverage(
@@ -50,13 +50,18 @@ def quantify_gene_coverage(
     contig2ranges: dict,
     min_depth: int = 1,
     min_quality: int = 0,
+    expected_labels: list = None,
 ) -> tuple:
     """Quantify breadth and depth of coverage over query-gene coordinates.
 
     ``contig2ranges`` maps each contig to ``[(START, END, LABEL), ...]`` (0-based,
     half-open) as produced by :func:`gff_query_ranges`/:func:`bed_query_ranges`;
     every range sharing a ``LABEL`` (e.g. all CDS segments of one query gene) is
-    pooled, so a query that matches multiple units is summarised on one row."""
+    pooled, so a query that matches multiple units is summarised on one row.
+
+    ``expected_labels`` (typically the resolved query list) seeds both output
+    dicts with 0 so a requested query that resolved to no coordinates is still
+    reported as absent rather than silently dropped."""
     reference_names = set(imported_bam.references)
     label_depths = defaultdict(list)
     label_coverages = defaultdict(list)
@@ -78,10 +83,11 @@ def quantify_gene_coverage(
                 raise ValueError(
                     f"Invalid region for query '{label}' on contig '{contig}': end ({end}) exceeds contig length ({contig_len})"
                 )
+            # excludes QC_fail/duplicate/secondary/supplementary reads
             coverage_data = imported_bam.count_coverage(
                 contig, start, end, quality_threshold=min_quality
             )
-            for i, _ in enumerate(range(start, end)):
+            for i  in range(start, end):
                 # calculate total depth across bases
                 total_depth = (
                     coverage_data[0][i]
@@ -93,8 +99,8 @@ def quantify_gene_coverage(
                 label_coverages[label].append(total_depth >= min_depth)
                 label_depths[label].append(total_depth)
 
-    depth_dict = {}
-    coverage_dict = {}
+    depth_dict = {label: 0 for label in expected_labels or []}
+    coverage_dict = {label: 0 for label in expected_labels or []}
     for label, depths in label_depths.items():
         depth_dict[label] = sum(depths) / len(depths)
         coverages = label_coverages[label]
@@ -113,7 +119,7 @@ def make_tsv(depth_dict: dict, coverage_dict: dict, ambiguous_contig: bool) -> s
     tsv_str = f"#{name}\taverage_depth\tpercent_coverage\n"
     for query, depth in depth_dict.items():
         tsv_str += f"{query}\t{depth}\t{coverage_dict[query]}\n"
-    return tsv_str.strip()
+    return tsv_str
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -184,7 +190,7 @@ def run_cli(args: argparse.Namespace) -> int:
 
     # quantify statistics and write
     depth_dict, coverage_dict = quantify_gene_coverage(
-        imported_bam, contig2ranges, args.min_depth, args.min_quality
+        imported_bam, contig2ranges, args.min_depth, args.min_quality, query_list
     )
     write_json("DEPTH_DICT.json", depth_dict)
     write_json("COVERAGE_DICT.json", coverage_dict)
