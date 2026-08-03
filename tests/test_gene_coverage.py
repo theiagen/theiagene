@@ -4,6 +4,8 @@ Coverage is quantified over a ``{<CONTIG>: [(START, END, LABEL), ...]}`` map (th
 shape :func:`theiagene.lib.query.gff_query_ranges`/``bed_query_ranges`` produce);
 every range sharing a ``LABEL`` is pooled onto one output row."""
 
+import argparse
+import json
 import re
 
 import pytest
@@ -40,6 +42,23 @@ class MockBam:
         ]
         zeros = [0] * (end - start)
         return (a, list(zeros), list(zeros), list(zeros))
+
+
+class MockMultiChannelBam:
+    """A MockBam whose per-base depth is spread across all four count_coverage
+    channels, so a test can prove quantify sums every channel (not just A)."""
+
+    def __init__(self, lengths, per_channel=(1, 2, 3, 4)):
+        self._lengths = dict(lengths)
+        self.references = tuple(lengths)
+        self._per_channel = per_channel
+
+    def get_reference_length(self, contig):
+        return self._lengths[contig]
+
+    def count_coverage(self, contig, start, end, quality_threshold=0):
+        width = end - start
+        return tuple([value] * width for value in self._per_channel)
 
 
 class _Args:
@@ -96,6 +115,11 @@ def test_make_tsv_renders_header_and_rows():
 def test_make_tsv_warns_in_header_when_contig_is_ambiguous():
     tsv = gene_coverage.make_tsv({"geneA": 1.0}, {"geneA": 100.0}, ambiguous_contig=True)
     assert tsv.splitlines()[0].startswith("#query (WARNING")
+
+
+def test_make_tsv_with_no_rows_is_header_only():
+    tsv = gene_coverage.make_tsv({}, {}, ambiguous_contig=False)
+    assert tsv == "#query\taverage_depth\tpercent_coverage\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -192,6 +216,75 @@ def test_quantify_raises_on_negative_start():
         gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
 
 
+def test_quantify_seeds_expected_labels_absent_from_ranges():
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    ranges = {"contig1": [(10, 20, "geneA")]}
+    depth, coverage = gene_coverage.quantify_gene_coverage(
+        bam, ranges, min_depth=1, expected_labels=["geneA", "geneMissing"]
+    )
+    # geneMissing resolved no coordinates but is still reported as absent (0)
+    assert depth == {"geneA": 5.0, "geneMissing": 0}
+    assert coverage == {"geneA": 100.0, "geneMissing": 0}
+
+
+def test_quantify_measured_label_overrides_the_zero_seed():
+    bam = MockBam({"contig1": 100}, default_depth=8)
+    ranges = {"contig1": [(10, 20, "geneA")]}
+    depth, coverage = gene_coverage.quantify_gene_coverage(
+        bam, ranges, min_depth=1, expected_labels=["geneA"]
+    )
+    # the seeded 0 is replaced by the measured value, not summed with it
+    assert depth["geneA"] == 8.0
+    assert coverage["geneA"] == 100.0
+
+
+def test_quantify_all_expected_labels_zero_when_no_ranges():
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    depth, coverage = gene_coverage.quantify_gene_coverage(
+        bam, {}, min_depth=1, expected_labels=["geneB", "geneA"]
+    )
+    # nothing measured; every requested query is reported as absent and sorted
+    assert depth == {"geneA": 0, "geneB": 0}
+    assert coverage == {"geneA": 0, "geneB": 0}
+    assert list(depth) == ["geneA", "geneB"]
+
+
+def test_quantify_across_multiple_contigs_keeps_labels_separate():
+    bam = MockBam({"contig1": 100, "contig2": 100}, default_depth=6)
+    ranges = {
+        "contig1": [(10, 20, "geneA")],
+        "contig2": [(30, 40, "geneB")],
+    }
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    assert depth == {"geneA": 6.0, "geneB": 6.0}
+    assert coverage == {"geneA": 100.0, "geneB": 100.0}
+
+
+def test_quantify_pools_one_label_across_contigs():
+    # depth 10 over contig1's bases, depth 0 over contig2's bases
+    def depth_fn(contig, pos):
+        return 10 if contig == "contig1" else 0
+
+    bam = MockBam({"contig1": 100, "contig2": 100}, depth_fn=depth_fn)
+    ranges = {
+        "contig1": [(0, 10, "geneA")],
+        "contig2": [(0, 10, "geneA")],
+    }
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    # both contigs' bases pool onto one geneA row: mean 5, half covered
+    assert depth["geneA"] == 5.0
+    assert coverage["geneA"] == 50.0
+
+
+def test_quantify_sums_all_four_coverage_channels():
+    bam = MockMultiChannelBam({"contig1": 100}, per_channel=(1, 2, 3, 4))
+    ranges = {"contig1": [(10, 20, "geneA")]}
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    # each base's depth is 1+2+3+4 = 10 summed across the A/C/G/T channels
+    assert depth["geneA"] == 10.0
+    assert coverage["geneA"] == 100.0
+
+
 # --------------------------------------------------------------------------- #
 # integration: GFF parse -> query match -> flatten -> quantify
 # --------------------------------------------------------------------------- #
@@ -261,3 +354,154 @@ def test_quantify_with_real_bam_counts_a_single_read(make_bam):
     # the single 50 bp read fully spans [10, 20) at depth 1
     assert depth["geneA"] == 1.0
     assert coverage["geneA"] == 100.0
+
+
+# --------------------------------------------------------------------------- #
+# run_cli / main: end-to-end orchestration and output files
+# --------------------------------------------------------------------------- #
+
+def _cli_args(bam, **overrides):
+    """A fully-defaulted gene_coverage Namespace with per-test overrides."""
+    parser = argparse.ArgumentParser()
+    gene_coverage.add_arguments(parser)
+    args = parser.parse_args(["--bam", bam])
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+def _read_outputs():
+    """Load the three files run_cli writes into the current directory."""
+    with open("DEPTH_DICT.json") as fh:
+        depth = json.load(fh)
+    with open("COVERAGE_DICT.json") as fh:
+        coverage = json.load(fh)
+    with open("COVERAGE_STATS.tsv") as fh:
+        tsv = fh.read()
+    return depth, coverage, tsv
+
+
+def _write_bed(tmp_path, rows, name="regions.bed"):
+    bed = tmp_path / name
+    bed.write_text("".join(f"{c}\t{s}\t{e}\t{n}\n" for c, s, e, n in rows))
+    return str(bed)
+
+
+def _make_multicontig_bam(path, contigs):
+    """Write and index a (read-free) BAM declaring several reference contigs."""
+    import pysam
+
+    header = {
+        "HD": {"VN": "1.0"},
+        "SQ": [{"LN": length, "SN": name} for name, length in contigs],
+    }
+    with pysam.AlignmentFile(str(path), "wb", header=header):
+        pass
+    pysam.index(str(path))
+    return str(path)
+
+
+def test_run_cli_gff_with_query_genes_writes_all_outputs(tmp_path, make_bam, monkeypatch):
+    gff = _write_gff(tmp_path)
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    args = _cli_args(bam, reference_gff=gff, query_genes=["geneA"])
+
+    monkeypatch.chdir(tmp_path)
+    assert gene_coverage.run_cli(args) == 0
+
+    depth, coverage, tsv = _read_outputs()
+    assert depth == {"geneA": 1.0}
+    assert coverage == {"geneA": 100.0}
+    assert tsv.splitlines()[0] == "#query\taverage_depth\tpercent_coverage"
+    assert "geneA\t1.0\t100.0" in tsv
+
+
+def test_run_cli_bed_as_coordinate_source(tmp_path, make_bam, monkeypatch):
+    # BED is itself the coordinate source: no GFF and no --query_genes
+    bed = _write_bed(tmp_path, [("contig1", 10, 20, "geneA")])
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    args = _cli_args(bam, bedfile=bed)
+
+    monkeypatch.chdir(tmp_path)
+    assert gene_coverage.run_cli(args) == 0
+
+    depth, coverage, _ = _read_outputs()
+    assert depth == {"geneA": 1.0}
+    assert coverage == {"geneA": 100.0}
+
+
+def test_run_cli_gff_source_with_bed_supplied_names(tmp_path, make_bam, monkeypatch):
+    # coordinates come from the GFF; the BED only supplies the query names
+    gff = _write_gff(tmp_path)
+    bed = _write_bed(tmp_path, [("ignored", 0, 1, "geneA")])
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    args = _cli_args(bam, reference_gff=gff, bedfile=bed)
+
+    monkeypatch.chdir(tmp_path)
+    assert gene_coverage.run_cli(args) == 0
+
+    depth, _, _ = _read_outputs()
+    # geneA resolved from the GFF CDS; the BED coordinates are never consulted
+    assert depth == {"geneA": 1.0}
+
+
+def test_run_cli_ambiguous_contig_collapses_and_warns(tmp_path, make_bam, monkeypatch):
+    # BED coordinates sit on a contig whose name differs from the BAM's single
+    # contig; ambiguous_contig re-files them onto the BAM contig
+    bed = _write_bed(tmp_path, [("ref_chrom", 10, 20, "geneA")])
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    args = _cli_args(bam, bedfile=bed, ambiguous_contig=True)
+
+    monkeypatch.chdir(tmp_path)
+    assert gene_coverage.run_cli(args) == 0
+
+    depth, coverage, tsv = _read_outputs()
+    assert depth == {"geneA": 1.0}
+    assert coverage == {"geneA": 100.0}
+    # the ambiguous-contig warning is surfaced in the TSV header
+    assert tsv.splitlines()[0].startswith("#query (WARNING")
+
+
+def test_run_cli_ambiguous_contig_rejects_multi_contig_bam(tmp_path, monkeypatch):
+    bed = _write_bed(tmp_path, [("ref_chrom", 10, 20, "geneA")])
+    bam = _make_multicontig_bam(
+        tmp_path / "multi.bam", [("contig1", 100), ("contig2", 100)]
+    )
+    args = _cli_args(bam, bedfile=bed, ambiguous_contig=True)
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="multiple contigs"):
+        gene_coverage.run_cli(args)
+
+
+def test_run_cli_reports_unresolved_query_as_zero_and_warns(
+    tmp_path, make_bam, monkeypatch, caplog
+):
+    gff = _write_gff(tmp_path)
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    # a query term that matches no GFF feature resolves no coordinates
+    args = _cli_args(bam, reference_gff=gff, query_genes=["ghost_gene"])
+
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level("WARNING"):
+        assert gene_coverage.run_cli(args) == 0
+
+    depth, coverage, _ = _read_outputs()
+    # still reported (seeded to 0), not silently dropped
+    assert depth == {"ghost_gene": 0}
+    assert coverage == {"ghost_gene": 0}
+    assert any("No query-gene coordinates" in r.message for r in caplog.records)
+
+
+def test_main_runs_end_to_end_via_argv(tmp_path, make_bam, monkeypatch):
+    gff = _write_gff(tmp_path)
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+
+    monkeypatch.chdir(tmp_path)
+    rc = gene_coverage.main(
+        ["--bam", bam, "--reference_gff", gff, "--query_genes", "geneA"]
+    )
+    assert rc == 0
+
+    depth, _, _ = _read_outputs()
+    assert depth == {"geneA": 1.0}
