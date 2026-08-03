@@ -87,7 +87,7 @@ def quantify_gene_coverage(
             coverage_data = imported_bam.count_coverage(
                 contig, start, end, quality_threshold=min_quality
             )
-            for i  in range(start, end):
+            for i, _ in enumerate(range(start, end)):
                 # calculate total depth across bases
                 total_depth = (
                     coverage_data[0][i]

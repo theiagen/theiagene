@@ -73,7 +73,7 @@ def test_input_error_handling_requires_a_coordinate_source():
 
 
 def test_input_error_handling_requires_query_genes_without_bed():
-    with pytest.raises(ValueError, match="query_genes"):
+    with pytest.raises(FileNotFoundError, match="query_genes"):
         gene_coverage.input_error_handling(_Args(reference_gff="ref.gff"))
 
 
