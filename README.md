@@ -90,3 +90,11 @@ theiagene report_variants \
   --suppress synonymous_variant \
   --output VARIANT_REPORT.txt
 ```
+
+## Library
+
+The subcommands share a gene/feature data model — the `Feature` and
+`FeatureCol` classes — that turns a flat GFF/GenBank annotation into a
+navigable gene → RNA → CDS/exon hierarchy. See
+[src/theiagene/lib/README.md](src/theiagene/lib/README.md) for a human-readable
+introduction and full API reference.
