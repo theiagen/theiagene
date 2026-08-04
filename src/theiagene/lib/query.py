@@ -114,11 +114,22 @@ def feature_identifiers(feature, qualifiers) -> list:
 
 def feature_label(feature) -> str:
     """Return a stable human-readable name for a query feature, preferring an
-    explicit gene name over the raw feature id."""
+    explicit gene name over the raw feature id.
+
+    The name may live on the query feature itself, on its parent (the gene
+    record usually carries ``gene``/``Name``) or on a CDS descendant (which
+    usually carries ``product``); the same related features consulted by
+    :func:`feature_identifiers` are searched so distinct genes resolve to
+    distinct labels."""
+    related = [feature]
+    if feature.parent is not None:
+        related.append(feature.parent)
+    related.extend(iter_descendants(feature))
     for key in ("gene", "Name", "product"):
-        value = feature.attributes.get(key)
-        if value:
-            return value
+        for related_feature in related:
+            value = related_feature.attributes.get(key)
+            if value:
+                return value
     return feature.fid
 
 
@@ -135,18 +146,18 @@ def gff_query_ranges(
 
     The query units are the ``group_by`` features (e.g. each RNA). When
     ``query_list`` is non-empty a unit is kept only if one of its identifiers
-    matches a query term, and the matched term becomes the annotation label;
-    otherwise every unit is kept and labelled by its own gene name."""
+    matches a query term; the query term is used only to filter, and every kept
+    unit is labelled by its own resolved gene name so distinct genes remain
+    distinct rows (a query matching two paralogs yields two labels)."""
     contig2ranges = defaultdict(list)
     for feature in features[group_by]:
         if query_list:
-            label = match_query(
+            matched = match_query(
                 query_list, feature_identifiers(feature, feature_qualifiers), exact_match
             )
-            if label is None:
+            if matched is None:
                 continue
-        else:
-            label = feature_label(feature)
+        label = feature_label(feature)
         contig = feature.seqid
         # only the requested-type subfeatures beneath this query unit (e.g. CDS)
         subfeatures = FeatureCol(list(iter_descendants(feature)), group=False)

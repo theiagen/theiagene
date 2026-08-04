@@ -45,6 +45,19 @@ def input_error_handling(args: argparse.Namespace) -> None:
         raise FileNotFoundError("'query_genes' or 'bedfile' required")
 
 
+def union_intervals(intervals: list) -> list:
+    """Merge overlapping or contiguous half-open ``(start, end)`` intervals into
+    a minimal set of disjoint intervals, so a base shared by two ranges (e.g.
+    overlapping isoform CDS) is represented once."""
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def quantify_gene_coverage(
     imported_bam: pysam.AlignmentFile,
     contig2ranges: dict,
@@ -57,14 +70,15 @@ def quantify_gene_coverage(
     ``contig2ranges`` maps each contig to ``[(START, END, LABEL), ...]`` (0-based,
     half-open) as produced by :func:`gff_query_ranges`/:func:`bed_query_ranges`;
     every range sharing a ``LABEL`` (e.g. all CDS segments of one query gene) is
-    pooled, so a query that matches multiple units is summarised on one row.
+    pooled into a per-base union before counting, so a base covered by two
+    overlapping ranges (e.g. isoform CDS) is counted once rather than twice.
 
     ``expected_labels`` (typically the resolved query list) seeds both output
     dicts with 0 so a requested query that resolved to no coordinates is still
     reported as absent rather than silently dropped."""
     reference_names = set(imported_bam.references)
-    label_depths = defaultdict(list)
-    label_coverages = defaultdict(list)
+    # label -> contig -> [(start, end), ...], validated as we group
+    label_ranges = defaultdict(lambda: defaultdict(list))
 
     for contig, ranges in contig2ranges.items():
         if contig not in reference_names:
@@ -83,29 +97,37 @@ def quantify_gene_coverage(
                 raise ValueError(
                     f"Invalid region for query '{label}' on contig '{contig}': end ({end}) exceeds contig length ({contig_len})"
                 )
-            # excludes QC_fail/duplicate/secondary/supplementary reads
-            coverage_data = imported_bam.count_coverage(
-                contig, start, end, quality_threshold=min_quality
-            )
-            for i, _ in enumerate(range(start, end)):
-                # calculate total depth across bases
-                total_depth = (
-                    coverage_data[0][i]
-                    + coverage_data[1][i]
-                    + coverage_data[2][i]
-                    + coverage_data[3][i]
-                )
-                # base is considered covered if beyond minimum depth
-                label_coverages[label].append(total_depth >= min_depth)
-                label_depths[label].append(total_depth)
+            label_ranges[label][contig].append((start, end))
 
     depth_dict = {label: 0 for label in expected_labels or []}
     coverage_dict = {label: 0 for label in expected_labels or []}
-    for label, depths in label_depths.items():
-        depth_dict[label] = sum(depths) / len(depths)
-        coverages = label_coverages[label]
+    for label, contig_map in label_ranges.items():
+        total_bases = 0
+        summed_depth = 0
+        covered_bases = 0
+        for contig, intervals in contig_map.items():
+            # union overlapping ranges so shared bases are counted once
+            for start, end in union_intervals(intervals):
+                # excludes QC_fail/duplicate/secondary/supplementary reads
+                coverage_data = imported_bam.count_coverage(
+                    contig, start, end, quality_threshold=min_quality
+                )
+                for i, _ in enumerate(range(start, end)):
+                    # calculate total depth across bases
+                    base_depth = (
+                        coverage_data[0][i]
+                        + coverage_data[1][i]
+                        + coverage_data[2][i]
+                        + coverage_data[3][i]
+                    )
+                    summed_depth += base_depth
+                    total_bases += 1
+                    # base is considered covered if beyond minimum depth
+                    if base_depth >= min_depth:
+                        covered_bases += 1
+        depth_dict[label] = summed_depth / total_bases
         # breadth is percent of covered bases exceeding min_depth
-        coverage_dict[label] = 100 * (sum(coverages) / len(coverages))
+        coverage_dict[label] = 100 * (covered_bases / total_bases)
 
     return dict(sorted(depth_dict.items())), dict(sorted(coverage_dict.items()))
 
