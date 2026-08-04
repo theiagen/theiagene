@@ -133,7 +133,7 @@ def feature_label(feature) -> str:
     return feature.fid
 
 
-def gff_query_ranges(
+def _grouped_query_ranges(
     features: FeatureCol,
     query_list: list,
     group_by: str,
@@ -141,14 +141,9 @@ def gff_query_ranges(
     feature_qualifiers: list,
     exact_match: bool,
 ) -> dict:
-    """Flatten the ``feature_type`` coordinates of the selected query genes to
-    ``{<CONTIG>: [(START, END, LABEL), ...]}`` (0-based, half-open).
-
-    The query units are the ``group_by`` features (e.g. each RNA). When
-    ``query_list`` is non-empty a unit is kept only if one of its identifiers
-    matches a query term; the query term is used only to filter, and every kept
-    unit is labelled by its own resolved gene name so distinct genes remain
-    distinct rows (a query matching two paralogs yields two labels)."""
+    """Flatten the ``feature_type`` coordinates of the query units selected at
+    the ``group_by`` level to ``{<CONTIG>: [(START, END, LABEL), ...]}``
+    (0-based, half-open); see :func:`gff_query_ranges`."""
     contig2ranges = defaultdict(list)
     for feature in features[group_by]:
         if query_list:
@@ -159,8 +154,10 @@ def gff_query_ranges(
                 continue
         label = feature_label(feature)
         contig = feature.seqid
-        # only the requested-type subfeatures beneath this query unit (e.g. CDS)
-        subfeatures = FeatureCol(list(iter_descendants(feature)), group=False)
+        # the requested-type features at or beneath this query unit (e.g. CDS);
+        # the unit itself is included so that grouping directly on the
+        # feature_type (the fallback level) still resolves its own coordinates
+        subfeatures = FeatureCol([feature] + list(iter_descendants(feature)), group=False)
         for subfeature in subfeatures[feature_type]:
             start, end = subfeature.start, subfeature.end
             if end <= start:
@@ -169,6 +166,37 @@ def gff_query_ranges(
                     f"start ({start}) must be < end ({end})"
                 )
             contig2ranges[contig].append((start, end, label))
+    return contig2ranges
+
+
+def gff_query_ranges(
+    features: FeatureCol,
+    query_list: list,
+    feature_type: str,
+    feature_qualifiers: list,
+    exact_match: bool,
+) -> dict:
+    """Flatten the ``feature_type`` coordinates of the selected query genes to
+    ``{<CONTIG>: [(START, END, LABEL), ...]}`` (0-based, half-open).
+
+    The query units are resolved by trying the ``gene`` level first and falling
+    back to the ``feature_type`` level (e.g. ``CDS``) when grouping by gene
+    resolves nothing -- so a bacterial annotation whose ``CDS`` is a direct child
+    of ``gene`` (no intervening ``mRNA``) still yields coordinates, as does an
+    annotation carrying only bare ``feature_type`` records with no gene parent.
+
+    When ``query_list`` is non-empty a unit is kept only if one of its
+    identifiers matches a query term; the query term is used only to filter, and
+    every kept unit is labelled by its own resolved gene name so distinct genes
+    remain distinct rows (a query matching two paralogs yields two labels)."""
+    # fallback order: the gene that owns the feature_type, then the raw
+    # feature_type itself for annotations that carry no gene record
+    for group_by in ("gene", feature_type):
+        contig2ranges = _grouped_query_ranges(
+            features, query_list, group_by, feature_type, feature_qualifiers, exact_match
+        )
+        if contig2ranges:
+            return contig2ranges
     return contig2ranges
 
 

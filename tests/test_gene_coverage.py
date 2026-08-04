@@ -348,7 +348,7 @@ def test_gff_query_ranges_matches_product_and_quantifies(tmp_path):
     features = assimilate_gff(_write_gff(tmp_path))
     # match the CDS product; keep only geneA, label by its resolved gene name
     ranges = gff_query_ranges(
-        features, ["geneA"], "RNA", "CDS", ["product"], exact_match=False
+        features, ["geneA"], "CDS", ["product"], exact_match=False
     )
     # CDS 1-based [11, 20] -> 0-based half-open [10, 20)
     assert ranges == {"contig1": [(10, 20, "geneA")]}
@@ -385,10 +385,42 @@ def test_gff_query_ranges_labels_paralogs_by_resolved_gene_not_query_term(tmp_pa
 
     features = assimilate_gff(_write_paralog_gff(tmp_path))
     ranges = gff_query_ranges(
-        features, ["ERG1"], "RNA", "CDS", ["product"], exact_match=False
+        features, ["ERG1"], "CDS", ["product"], exact_match=False
     )
     # both mRNAs match the "ERG1" substring, but resolve to distinct labels
     assert ranges == {"c1": [(0, 300, "ERG1"), (999, 1300, "ERG11")]}
+
+
+def test_gff_query_ranges_falls_back_to_gene_without_rna(tmp_path):
+    # regression: Bakta / RefSeq bacterial GFF3 carry no mRNA record -- CDS is a
+    # direct child of gene -- so grouping must fall back to the gene level rather
+    # than reporting the covered gene as zero coordinates
+    from theiagene.lib.parsers import assimilate_gff
+    from theiagene.lib.query import gff_query_ranges
+
+    gff = tmp_path / "bakta.gff"
+    gff.write_text(
+        "c1\t.\tgene\t1\t900\t.\t+\t.\tID=g1;gene=ERG11\n"
+        "c1\t.\tCDS\t1\t900\t.\t+\t0\tID=c1cds;Parent=g1;product=ERG11\n"
+    )
+    ranges = gff_query_ranges(
+        assimilate_gff(str(gff)), ["ERG11"], "CDS", ["product"], exact_match=False
+    )
+    assert ranges == {"c1": [(0, 900, "ERG11")]}
+
+
+def test_gff_query_ranges_falls_back_to_feature_type_without_gene(tmp_path):
+    # an annotation carrying only bare CDS records (no gene parent) resolves by
+    # grouping directly on the feature_type
+    from theiagene.lib.parsers import assimilate_gff
+    from theiagene.lib.query import gff_query_ranges
+
+    gff = tmp_path / "cds_only.gff"
+    gff.write_text("c1\t.\tCDS\t1\t900\t.\t+\t0\tID=c1cds;product=ERG11\n")
+    ranges = gff_query_ranges(
+        assimilate_gff(str(gff)), ["ERG11"], "CDS", ["product"], exact_match=False
+    )
+    assert ranges == {"c1": [(0, 900, "ERG11")]}
 
 
 def test_gff_query_ranges_honors_feature_type(tmp_path):
@@ -398,13 +430,13 @@ def test_gff_query_ranges_honors_feature_type(tmp_path):
     features = assimilate_gff(_write_gff(tmp_path))
     # geneA carries both a CDS and an exon over [10, 20); selecting exon still works
     exon_ranges = gff_query_ranges(
-        features, ["geneA"], "RNA", "exon", ["product"], exact_match=False
+        features, ["geneA"], "exon", ["product"], exact_match=False
     )
     assert exon_ranges == {"contig1": [(10, 20, "geneA")]}
 
     # a feature_type absent from the matched unit resolves no coordinates
     empty = gff_query_ranges(
-        features, ["geneB"], "RNA", "exon", ["product"], exact_match=False
+        features, ["geneB"], "exon", ["product"], exact_match=False
     )
     assert empty == {}
 

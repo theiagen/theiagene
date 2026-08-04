@@ -22,7 +22,6 @@ def test_build_parser_registers_gene_coverage_subcommand():
 def test_gene_coverage_argument_defaults():
     parser = cli.build_parser()
     args = parser.parse_args(["gene_coverage", "--bam", "x.bam", "--reference_gff", "r.gff"])
-    assert args.group_by == "RNA"
     assert args.feature_type == "CDS"
     assert args.min_depth == 1
     assert args.min_quality == 0

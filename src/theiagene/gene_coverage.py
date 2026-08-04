@@ -150,7 +150,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--bedfile")
     parser.add_argument("--reference_gff")
     parser.add_argument("--query_genes", nargs="+")
-    parser.add_argument("--group_by", default="RNA")
     parser.add_argument("--feature_type", default="CDS")
     parser.add_argument(
         "--feature_qualifier",
@@ -186,7 +185,6 @@ def run_cli(args: argparse.Namespace) -> int:
         contig2ranges = gff_query_ranges(
             features,
             query_list,
-            args.group_by,
             args.feature_type,
             feature_qualifiers,
             args.exact_match,
