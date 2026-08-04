@@ -123,6 +123,24 @@ def test_make_tsv_with_no_rows_is_header_only():
 
 
 # --------------------------------------------------------------------------- #
+# union_intervals
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    "intervals, expected",
+    [
+        ([(0, 50), (0, 100)], [(0, 100)]),            # overlap -> single span
+        ([(0, 50), (50, 100)], [(0, 100)]),           # contiguous -> merged
+        ([(0, 50), (60, 100)], [(0, 50), (60, 100)]),  # disjoint -> kept apart
+        ([(60, 100), (0, 50)], [(0, 50), (60, 100)]),  # unsorted input -> ordered
+        ([(0, 100), (20, 40)], [(0, 100)]),           # nested -> outer span
+    ],
+)
+def test_union_intervals_merges_overlapping_and_contiguous(intervals, expected):
+    assert gene_coverage.union_intervals(intervals) == expected
+
+
+# --------------------------------------------------------------------------- #
 # quantify_gene_coverage
 # --------------------------------------------------------------------------- #
 
@@ -146,6 +164,24 @@ def test_quantify_pools_segments_sharing_a_label():
     # 12 evaluated bases, all at depth 4
     assert depth["geneA"] == 4.0
     assert coverage["geneA"] == 100.0
+
+
+def test_quantify_unions_overlapping_ranges_sharing_a_label():
+    # regression: two overlapping isoform CDS under one label must be counted
+    # over their per-base union, not concatenated (which double-weights the
+    # shared bases). Depth 1 over [0, 50), uncovered over [50, 100).
+    def depth_fn(contig, pos):
+        return 1 if pos < 50 else 0
+
+    bam = MockBam({"c1": 200}, depth_fn=depth_fn)
+    ranges = {"c1": [(0, 50, "GENE"), (0, 100, "GENE")]}
+
+    depth, coverage = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+
+    # union is [0, 100): 100 bases, 50 covered -> 50% breadth, 0.5x depth.
+    # a 150-base concatenation would wrongly report 66.67% / 0.6667x.
+    assert coverage["GENE"] == 50.0
+    assert depth["GENE"] == 0.5
 
 
 def test_quantify_partial_breadth_from_min_depth_threshold():
@@ -310,7 +346,7 @@ def test_gff_query_ranges_matches_product_and_quantifies(tmp_path):
     from theiagene.lib.query import gff_query_ranges
 
     features = assimilate_gff(_write_gff(tmp_path))
-    # match the CDS product; keep only geneA, label by the matched query term
+    # match the CDS product; keep only geneA, label by its resolved gene name
     ranges = gff_query_ranges(
         features, ["geneA"], "RNA", "CDS", ["product"], exact_match=False
     )
@@ -322,6 +358,37 @@ def test_gff_query_ranges_matches_product_and_quantifies(tmp_path):
     # geneB was filtered out; only the matched query is reported
     assert depth == {"geneA": 7.0}
     assert coverage == {"geneA": 100.0}
+
+
+def _write_paralog_gff(tmp_path):
+    """Two paralogs (ERG1, ERG11) whose gene name lives on the parent ``gene``
+    record and CDS ``product`` -- not on the mRNA. ``ERG1`` is a substring of
+    ``ERG11``, so a substring query for ``ERG1`` matches both units."""
+    gff = tmp_path / "paralogs.gff"
+    gff.write_text(
+        "c1\t.\tgene\t1\t300\t.\t+\t.\tID=g1;gene=ERG1\n"
+        "c1\t.\tmRNA\t1\t300\t.\t+\t.\tID=r1;Parent=g1\n"
+        "c1\t.\tCDS\t1\t300\t.\t+\t0\tID=c1a;Parent=r1;product=ERG1\n"
+        "c1\t.\tgene\t1000\t1300\t.\t+\t.\tID=g2;gene=ERG11\n"
+        "c1\t.\tmRNA\t1000\t1300\t.\t+\t.\tID=r2;Parent=g2\n"
+        "c1\t.\tCDS\t1000\t1300\t.\t+\t0\tID=c2a;Parent=r2;product=ERG11\n"
+    )
+    return str(gff)
+
+
+def test_gff_query_ranges_labels_paralogs_by_resolved_gene_not_query_term(tmp_path):
+    # regression: a substring query matching two paralogs must yield two rows
+    # labelled by each unit's resolved gene name -- not one row labelled by the
+    # shared query term (which would collapse distinct genes together)
+    from theiagene.lib.parsers import assimilate_gff
+    from theiagene.lib.query import gff_query_ranges
+
+    features = assimilate_gff(_write_paralog_gff(tmp_path))
+    ranges = gff_query_ranges(
+        features, ["ERG1"], "RNA", "CDS", ["product"], exact_match=False
+    )
+    # both mRNAs match the "ERG1" substring, but resolve to distinct labels
+    assert ranges == {"c1": [(0, 300, "ERG1"), (999, 1300, "ERG11")]}
 
 
 def test_gff_query_ranges_honors_feature_type(tmp_path):
