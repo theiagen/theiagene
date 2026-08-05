@@ -3,6 +3,7 @@
 from collections import defaultdict
 
 from theiagene.lib.feature import FeatureCol
+from theiagene.lib.parsers import iter_bed_rows
 
 
 def exact_check(query_set: set, id: str) -> bool:
@@ -16,9 +17,8 @@ def substring_check(query_set: set, id: str) -> bool:
 
 
 def extract_queries_from_bed(bedfile: str) -> set:
-    """Extract query regions from BED"""
-    with open(bedfile, "r") as raw:
-        return set(x.split()[3] for x in raw)
+    """Extract query regions from BED (the name column of each data row)"""
+    return {data[3] for data in iter_bed_rows(bedfile)}
 
 
 def normalize_name(name: str) -> str:
@@ -133,6 +133,25 @@ def feature_label(feature) -> str:
     return feature.fid
 
 
+def validate_region(start: int, end: int, label: str, contig: str, contig_len: int = None) -> None:
+    """Raise ``ValueError`` when a query region's coordinates are invalid.
+
+    Query ranges are 0-based, half-open, so ``start`` must be < ``end``; this is
+    checked wherever a range is built (GFF and BED) and again at quantification.
+    When a ``contig_len`` is supplied (the BAM stage, which knows the reference
+    length) the region must also fall within ``[0, contig_len]``. The message
+    names the query label and contig so a bad region is traceable back to the
+    GFF record or BED row it came from."""
+    prefix = f"Invalid region for query '{label}' on contig '{contig}': "
+    if end <= start:
+        raise ValueError(prefix + f"start ({start}) must be < end ({end})")
+    if contig_len is not None:
+        if start < 0:
+            raise ValueError(prefix + f"start ({start}) must be >= 0")
+        if end > contig_len:
+            raise ValueError(prefix + f"end ({end}) exceeds contig length ({contig_len})")
+
+
 def _grouped_query_ranges(
     features: FeatureCol,
     query_list: list,
@@ -160,11 +179,7 @@ def _grouped_query_ranges(
         subfeatures = FeatureCol([feature] + list(iter_descendants(feature)), group=False)
         for subfeature in subfeatures[feature_type]:
             start, end = subfeature.start, subfeature.end
-            if end <= start:
-                raise ValueError(
-                    f"Invalid region for query '{label}' on contig '{contig}': "
-                    f"start ({start}) must be < end ({end})"
-                )
+            validate_region(start, end, label, contig)
             contig2ranges[contig].append((start, end, label))
     return contig2ranges
 
@@ -208,22 +223,12 @@ def bed_query_ranges(bedfile: str, query_set: set) -> dict:
     A BED region is used directly as a query coordinate; the name column (col 4)
     is both the filter key and the annotation label."""
     contig2ranges = defaultdict(list)
-    with open(bedfile) as handle:
-        for line in handle:
-            if line.startswith("#"):
-                continue
-            data = line.split()
-            if not data:
-                continue
-            contig, start, end, name = data[0], int(data[1]), int(data[2]), data[3]
-            if query_set and name not in query_set:
-                continue
-            if end <= start:
-                raise ValueError(
-                    f"Invalid region for query '{name}' on contig '{contig}': "
-                    f"start ({start}) must be < end ({end})"
-                )
-            contig2ranges[contig].append((start, end, name))
+    for data in iter_bed_rows(bedfile):
+        contig, start, end, name = data[0], int(data[1]), int(data[2]), data[3]
+        if query_set and name not in query_set:
+            continue
+        validate_region(start, end, name, contig)
+        contig2ranges[contig].append((start, end, name))
     return contig2ranges
 
 

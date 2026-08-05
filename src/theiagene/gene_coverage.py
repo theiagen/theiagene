@@ -30,6 +30,7 @@ from theiagene.lib.query import (
     gff_query_ranges,
     bed_query_ranges,
     collapse_to_single_contig,
+    validate_region,
 )
 from theiagene.lib.logging_config import configure_logging
 
@@ -85,18 +86,7 @@ def quantify_gene_coverage(
             raise ValueError(f"Contig '{contig}' not found in BAM references")
         contig_len = imported_bam.get_reference_length(contig)
         for start, end, label in ranges:
-            if end <= start:
-                raise ValueError(
-                    f"Invalid region for query '{label}' on contig '{contig}': start ({start}) must be < end ({end})"
-                )
-            if start < 0:
-                raise ValueError(
-                    f"Invalid region for query '{label}' on contig '{contig}': start ({start}) must be >= 0"
-                )
-            if end > contig_len:
-                raise ValueError(
-                    f"Invalid region for query '{label}' on contig '{contig}': end ({end}) exceeds contig length ({contig_len})"
-                )
+            validate_region(start, end, label, contig, contig_len)
             label_ranges[label][contig].append((start, end))
 
     depth_dict = {label: 0 for label in expected_labels or []}

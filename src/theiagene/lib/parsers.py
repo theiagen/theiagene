@@ -6,7 +6,7 @@ import gzip
 import json
 import logging
 import threading
-from collections import defaultdict, Counter
+from collections import Counter
 from urllib.parse import unquote
 
 import pysam
@@ -148,47 +148,26 @@ def import_bam(bamfile: str) -> pysam.AlignmentFile:
     return imported_bam
 
 
-def parse_bed_genes(
-    bedfile: str,
-    exact_match: bool,
-    contig_names,
-    require: bool = True,
-    feature_type: str = "CDS",
-) -> list:
-    """Parse a BED file into :class:`Gene` objects (coverage-only format).
+def iter_bed_rows(bedfile: str, min_columns: int = 4):
+    """Yield the whitespace-split columns of each BED data row.
 
-    Rows sharing a name on the same contig accumulate as multiple parts, matching
-    the multi-segment handling of the GFF parsers.  A BED file carries no
-    feature type of its own, so its regions are filed under ``feature_type`` (the
-    type the coverage caller quantifies) so they are read back consistently."""
-    order = []
-    parent2feature_dict = defaultdict(list)
-    counter = Counter()
+    Comment lines (starting with ``#``) and blank/whitespace-only lines are
+    skipped; a data row carrying fewer than ``min_columns`` columns raises
+    ``ValueError`` naming the file and 1-based line number. This is the single
+    place the BED readers agree on what a data row is, so comment/blank handling
+    and the column-count guard live here rather than being re-derived (or
+    forgotten) at each call site."""
     with open(bedfile) as handle:
-        for line in handle:
-            if line.startswith("#"):
+        for lineno, line in enumerate(handle, 1):
+            if line.startswith("#") or not line.strip():
                 continue
             data = line.split()
-            if not data:
-                continue
-            # we will assume the name is the parent ID in case there are multiple
-            pid = data[3]
-            # 1-index Counter
-            counter[pid] += 1
-            fid = pid + f"_{counter[pid]}"
-            # BED files are already 0-based, half-open
-            contig = data[0]
-            feature = Feature(fid=fid, 
-                              pid=pid,
-                              seqid=contig,
-                              score=data[4] if len(data) > 4 else None,
-                              strand=data[5] if len(data) > 5 else None,
-                              start=data[1],
-                              end=data[2],
-                              type=feature_type
-                            )
-            parent2feature_dict[pid].append(feature)
-    
+            if len(data) < min_columns:
+                raise ValueError(
+                    f"{bedfile}:{lineno}: BED row has {len(data)} columns, "
+                    f"need >= {min_columns}"
+                )
+            yield data
 
 
 def _is_bgzf(path: str) -> bool:
