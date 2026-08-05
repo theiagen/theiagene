@@ -166,6 +166,28 @@ def test_group_features_rejects_ambiguous_parent_id():
         group_features(feats)
 
 
+def test_group_features_falls_back_to_fid_without_id_attribute():
+    # features built directly (explicit fid=, no ID attribute) must keep their
+    # own identity: without the fallback every one resolves to None, collides on
+    # the None key, and is silently renamed None_1, None_2, ...
+    a = Feature(seqid="c1", start=0, end=100, type="gene", fid="geneA")
+    b = Feature(seqid="c1", start=200, end=300, type="gene", fid="geneB")
+    grouped = group_features([a, b])
+    assert a.fid == "geneA" and b.fid == "geneB"
+    assert [f.fid for f in grouped["c1"]] == ["geneA", "geneB"]
+
+
+def test_featurecol_by_id_resolves_directly_built_features():
+    # regression: FeatureCol([...]) from a plain list[Feature] indexes each by its
+    # supplied fid; before the fix by_id raised KeyError for every feature past the
+    # first because their fids had been overwritten to None_1, None_2, ...
+    a = Feature(seqid="c1", start=0, end=100, type="gene", fid="geneA")
+    b = Feature(seqid="c1", start=200, end=300, type="gene", fid="geneB")
+    col = FeatureCol([a, b])
+    assert col.by_id("geneA") is a
+    assert col.by_id("geneB") is b
+
+
 def test_featurecol_buckets_features_by_canonical_class():
     feats = [_feat("a", "mRNA"), _feat("b", "CDS"), _feat("c", "ncRNA")]
     # unrelated features (no Parent/ID links); skip grouping
