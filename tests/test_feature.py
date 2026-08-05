@@ -60,6 +60,22 @@ def test_feature_sorts_coordinates_and_coerces_columns():
     assert feat.fid == "cds-A" and feat.pid == "rna-A"
 
 
+@pytest.mark.parametrize(
+    "start, end",
+    [(None, 6), (0, None), (None, None), (".", 6), (0, "")],
+)
+def test_feature_requires_both_coordinates(start, end):
+    # a missing/undefined start or end cannot yield a coordinate span
+    with pytest.raises(ValueError, match="start and stop coordinates required"):
+        Feature(fid="a", start=start, end=end)
+
+
+def test_feature_accepts_zero_coordinate():
+    # start=0 is a valid 0-based coordinate, not a missing value
+    feat = Feature(fid="a", start=0, end=6)
+    assert (feat.start, feat.end) == (0, 6)
+
+
 def test_feature_defaults_are_not_shared_between_instances():
     # attributes/descendants must be per-instance, else the hierarchy collapses
     a = Feature(fid="a", start=0, end=6)

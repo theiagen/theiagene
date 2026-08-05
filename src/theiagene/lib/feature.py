@@ -120,10 +120,15 @@ class Feature:
         self.seqid = seqid
         self.source = source
         self.type = type
-        put_start = _as_int(start, "start")
-        put_end = _as_int(end, "end")
+        putative_start = _as_int(start, "start")
+        putative_end = _as_int(end, "end")
+        # a coordinate of 0 is valid (0-based, half-open), so test for an
+        # undefined column explicitly rather than by falsiness
+        if putative_start is None or putative_end is None:
+            raise ValueError("start and stop coordinates required to generate Feature")
+
         # enforce start < end
-        self.start, self.end = sorted((put_start, put_end))
+        self.start, self.end = sorted((putative_start, putative_end))
         self.score = _as_int(score, "score")
         self.strand = _as_strand(strand)
         self.phase = _as_int(phase, "phase")
