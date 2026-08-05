@@ -216,10 +216,7 @@ def group_features(features: list, parent_ids: list = ["Parent", "parent"], ids:
     id_counts = Counter()
     forbidden = set()
     for feature in features:
-        # fall back to the caller-supplied fid when no ID attribute is present,
-        # so directly-constructed features (explicit fid=, empty attributes) keep
-        # their identity instead of all collapsing onto the None key
-        fid = _attr_get(feature.attributes, ids) or feature.fid
+        fid = feature.fid
         if fid in id2feature:
             forbidden.add(fid)
             # make the ID unique by appending a count
