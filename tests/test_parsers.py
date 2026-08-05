@@ -121,11 +121,29 @@ def test_iter_gff_features_raises_on_wrong_field_count(tmp_path):
         list(parsers.iter_gff_features(str(path)))
 
 
-def test_iter_gff_features_raises_when_id_missing(tmp_path):
+def test_iter_gff_features_synthesizes_id_when_missing(tmp_path):
+    # GFF3 only requires ID on features with children or that span multiple lines,
+    # so a spec-legal CDS carrying only Parent= must still parse. A stable ID is
+    # synthesized from the type, a per-type count, and the parent id, and written
+    # back to the attributes so it survives a round-trip through to_gff.
     path = tmp_path / "noid.gff"
+    path.write_text(
+        "chr1\t.\tCDS\t10\t33\t.\t+\t0\tParent=g1;product=alpha\n"
+        "chr1\t.\tCDS\t40\t60\t.\t+\t0\tParent=g1;product=alpha\n"
+    )
+    feats = list(parsers.iter_gff_features(str(path)))
+    # per-type count keeps multi-segment rows under the same parent distinct
+    assert [f.fid for f in feats] == ["cds1_g1", "cds2_g1"]
+    assert feats[0].attributes["ID"] == "cds1_g1"
+
+
+def test_iter_gff_features_synthesizes_id_without_parent(tmp_path):
+    # with no Parent= the synthetic ID is just the type plus its per-type count
+    path = tmp_path / "noid_noparent.gff"
     path.write_text("chr1\t.\tCDS\t10\t33\t.\t+\t0\tproduct=alpha\n")
-    with pytest.raises(AttributeError, match="No ID obtained for feature"):
-        list(parsers.iter_gff_features(str(path)))
+    feats = list(parsers.iter_gff_features(str(path)))
+    assert [f.fid for f in feats] == ["cds1"]
+    assert feats[0].attributes["ID"] == "cds1"
 
 
 # --------------------------------------------------------------------------- #
