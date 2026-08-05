@@ -151,8 +151,24 @@ class Feature:
         if ingest:
             self._ingest()
 
-        if not self.fid:
-            raise AttributeError('No ID obtained for feature')
+
+    def synthesize_id(self, count: int) -> str:
+        """Assign and return a synthetic feature ID for a record that carried none.
+
+        GFF3 only requires ``ID`` on features that have children or that span
+        multiple lines, so a spec-legal CDS/exon row may arrive with only
+        ``Parent=``. The ID is built as ``{type}{count}`` -- the lowercased
+        feature type followed by a per-type occurrence count -- and suffixed with
+        ``_{pid}`` when a parent is known, which keeps multi-segment rows sharing
+        one parent distinct. The value is written back into ``attributes['ID']``
+        so it survives a round-trip through ``to_gff``."""
+        base = (self.type or "feature").lower()
+        fid = f"{base}{count}"
+        if self.pid:
+            fid = f"{fid}_{self.pid}"
+        self.fid = fid
+        self.attributes["ID"] = fid
+        return fid
 
 
     def _ingest(self):

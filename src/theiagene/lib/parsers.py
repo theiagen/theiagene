@@ -90,6 +90,9 @@ def iter_gff_features(reference_gff: str):
     A ``.gz`` suffix routes the file through ``gzip`` (text mode), so a compressed
     GFF3 enters the same parsing loop as a plain-text one."""
     opener = gzip.open if reference_gff.endswith(".gz") else open
+    # a per-type running count backs the IDs synthesized for records that carry
+    # no ID of their own (spec-legal for childless, single-line CDS/exon rows)
+    type_counts = Counter()
     with opener(reference_gff, "rt") as handle:
         for line in handle:
             line = line.rstrip("\n")
@@ -102,7 +105,7 @@ def iter_gff_features(reference_gff: str):
             if len(fields) != 9:
                 raise ValueError(f"incorrectly formatted GFF: {len(fields)} fields recovered; 9 expected")
             seqid, source, obs_type, start, end, score, strand, phase, raw_attributes = fields
-            yield Feature(
+            feature = Feature(
                 seqid=seqid,
                 source=source,
                 type=obs_type,
@@ -116,6 +119,12 @@ def iter_gff_features(reference_gff: str):
                 attributes=raw_attributes,
                 ingest=True,
             )
+            if not feature.fid:
+                # synthesize a stable ID so a spec-legal ID-less record still parses
+                type_key = (feature.type or "").lower()
+                type_counts[type_key] += 1
+                feature.synthesize_id(type_counts[type_key])
+            yield feature
 
 
 def assimilate_gff(gff: str) -> FeatureCol:
