@@ -5,6 +5,7 @@ import textwrap
 import pytest
 
 from theiagene import report_variants as rv
+from theiagene.lib.parsers import assimilate_gff
 
 
 # A minimal single-sample FreeBayes-style VCF exercising: a biallelic SNP, a
@@ -112,8 +113,34 @@ def test_report_line_appends_depths_after_semicolon(vcf):
     }
     line = rv.report_line(row, "lanosterol 14-alpha demethylase", index)
     assert line == (
-        "lanosterol.14-alpha.demethylase: lanosterol 14-alpha demethylase "
+        'lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" '
         "(missense_variant c.428A>G p.Lys143Arg; T:0 C:562)"
+    )
+
+
+def test_report_line_leads_with_query_label(vcf):
+    index = rv.build_depth_index(vcf)
+    row = {
+        "Uploaded_variation": "chr1_100_T/C",
+        "Allele": "C",
+        "Consequence": "missense_variant",
+        "HGVSc": "rna-x:c.428A>G",
+        "HGVSp": "prot-x:p.(Lys143Arg)",
+    }
+    line = rv.report_line(row, "lanosterol 14-alpha demethylase", index, "ERG11")
+    assert line == (
+        'ERG11: "lanosterol 14-alpha demethylase" '
+        "(missense_variant c.428A>G p.Lys143Arg; T:0 C:562)"
+    )
+
+
+def test_report_line_fallback_label_drops_commas_from_product():
+    # the report is joined with ',', so a comma may not survive into the label
+    row = {"Consequence": "missense_variant", "HGVSc": "rna-x:c.1A>C", "HGVSp": "-"}
+    line = rv.report_line(row, "1,3-beta-glucan synthase component FKS1")
+    assert line == (
+        '1.3-beta-glucan.synthase.component.FKS1: '
+        '"1,3-beta-glucan synthase component FKS1" (missense_variant c.1A>C)'
     )
 
 
@@ -124,7 +151,36 @@ def test_report_line_without_index_is_unchanged():
         "HGVSp": "-",
     }
     line = rv.report_line(row, "product name")
-    assert line == "product.name: product name (missense_variant c.428A>G)"
+    assert line == 'product.name: "product name" (missense_variant c.428A>G)'
+
+
+def test_report_line_expands_percent_encoded_synonymous_change():
+    row = {
+        "Consequence": "synonymous_variant",
+        "HGVSc": "rna-x:c.492C>T",
+        # VEP percent-encodes the '=' of a synonymous protein change
+        "HGVSp": "prot-x:p.Asp164%3D",
+    }
+    line = rv.report_line(row, "product")
+    assert line == 'product: "product" (synonymous_variant c.492C>T p.Asp164Asp)'
+
+
+@pytest.mark.parametrize(
+    "suffix,expected",
+    [
+        ("p.Asp164=", "p.Asp164Asp"),
+        ("p.D164=", "p.D164D"),
+        ("p.Ter330=", "p.Ter330Ter"),
+        # no single reference residue to repeat -- left alone
+        ("p.=", "p.="),
+        ("p.Asp164_Leu166=", "p.Asp164_Leu166="),
+        # not a synonymous change
+        ("p.Lys143Arg", "p.Lys143Arg"),
+        ("c.428A>G", "c.428A>G"),
+    ],
+)
+def test_expand_synonymous(suffix, expected):
+    assert rv._expand_synonymous(suffix) == expected
 
 
 def test_report_line_omits_depths_when_variant_absent(vcf):
@@ -137,4 +193,75 @@ def test_report_line_omits_depths_when_variant_absent(vcf):
         "HGVSp": "-",
     }
     line = rv.report_line(row, "product", index)
-    assert line == "product: product (missense_variant c.1A>C)"
+    assert line == 'product: "product" (missense_variant c.1A>C)'
+
+
+# --------------------------------------------------------------------------- #
+# report_variants (end to end, through the GFF feature hierarchy)
+# --------------------------------------------------------------------------- #
+
+# gene -> mRNA -> CDS, the hierarchy a VEP 'Feature' (the mRNA) is resolved
+# through; the product's ',' is percent-encoded as GFF3 column 9 requires
+_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene-FKS1;Name=FKS1",
+        "chr1\t.\tmRNA\t1\t1000\t.\t+\t.\tID=rna-x;Parent=gene-FKS1",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-x;Parent=rna-x;"
+        "product=1%2C3-beta-glucan synthase component FKS1",
+    ]
+) + "\n"
+
+_VEP_TSV = "\n".join(
+    [
+        "## VEP run statistics",
+        "#Uploaded_variation\tLocation\tAllele\tConsequence\tFeature\tHGVSc\tHGVSp",
+        "chr1_100_T/C\tchr1:100\tC\tsynonymous_variant\trna-x\t"
+        "rna-x:c.492C>T\tprot-x:p.Asp164%3D",
+    ]
+) + "\n"
+
+
+@pytest.fixture
+def annotations(tmp_path):
+    gff = tmp_path / "reference.gff"
+    gff.write_text(_GFF)
+    tsv = tmp_path / "annotations.tsv"
+    tsv.write_text(_VEP_TSV)
+    return str(gff), str(tsv)
+
+
+def test_report_variants_labels_lines_by_query_gene(annotations):
+    gff, tsv = annotations
+    features = assimilate_gff(gff)
+    lines = rv.report_variants(
+        tsv, features, set(), "CDS", ["product"], query_list=["FKS1"]
+    )
+    assert lines == [
+        'FKS1: "1,3-beta-glucan synthase component FKS1" '
+        "(synonymous_variant c.492C>T p.Asp164Asp)"
+    ]
+
+
+def test_report_variants_falls_back_to_product_label(annotations):
+    gff, tsv = annotations
+    features = assimilate_gff(gff)
+    # no query matches this feature, so the product names the line instead
+    lines = rv.report_variants(
+        tsv, features, set(), "CDS", ["product"], query_list=["ERG11"]
+    )
+    assert lines == [
+        '1.3-beta-glucan.synthase.component.FKS1: '
+        '"1,3-beta-glucan synthase component FKS1" '
+        "(synonymous_variant c.492C>T p.Asp164Asp)"
+    ]
+
+
+def test_report_variants_exact_match_rejects_substring_query(annotations):
+    gff, tsv = annotations
+    features = assimilate_gff(gff)
+    # 'FKS1' is only a substring of the product/gene id, so --exact_match drops it
+    lines = rv.report_variants(
+        tsv, features, set(), "CDS", ["product"], query_list=["FKS1"], exact_match=True
+    )
+    assert lines[0].startswith("1.3-beta-glucan.synthase.component.FKS1: ")

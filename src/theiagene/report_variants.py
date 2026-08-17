@@ -1,27 +1,42 @@
-"""Render VEP variant annotations into product-named report lines.
+"""Render VEP variant annotations into gene-labelled report lines.
 
 Given a VEP ``--tab`` output TSV and the reference GFF used to produce it, this
 command keeps the rows whose ``Consequence`` is not suppressed, resolves each
 row's ``Feature`` (an RNA) back to its CDS product name through the GFF feature
-hierarchy, and rewrites the transcript/protein prefixes of the HGVSc/HGVSp
-strings to that product name, e.g.::
+hierarchy, and replaces the transcript/protein prefixes of the HGVSc/HGVSp
+strings with a single leading gene label, e.g.::
 
-    lanosterol.14-alpha.demethylase: lanosterol 14-alpha demethylase (missense_variant c.428A>G p.Lys143Arg)
+    ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)
+
+The label is the ``--query_genes`` term that matches the row's feature -- the
+name the caller asked about, not the full product it resolved to -- and the
+product follows in quotes so a name carrying commas survives being joined into
+a comma-delimited report. Without ``--query_genes`` (or when none match) the
+label falls back to the normalized product name.
 
 When the source VCF is supplied via ``--vcf``, each line also carries
 the variant's per-allele read depths, e.g.::
 
-    lanosterol.14-alpha.demethylase: lanosterol 14-alpha demethylase (missense_variant c.428A>G p.Lys143Arg; T:0 C:562)
+    ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg; T:0 C:562)
 
 Rows carrying neither an HGVSc nor an HGVSp string are ignored for now."""
 
+import re
 import sys
 import logging
 import argparse
+from urllib.parse import unquote
 
 from theiagene.lib.feature import FeatureCol
 from theiagene.lib.parsers import assimilate_gff, import_vcf
-from theiagene.lib.query import split_qualifiers
+from theiagene.lib.query import (
+    ordered_query_genes,
+    extract_queries_from_bed,
+    feature_identifiers,
+    match_query,
+    normalize_name,
+    split_qualifiers,
+)
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -141,14 +156,13 @@ def _consequences(row: dict) -> list:
     return raw.replace("&", ",").replace(" ", "").split(",") if raw else []
 
 
-def _cds_product(features: FeatureCol, feature_id: str, feature_type: str, qualifiers: list):
-    """Resolve a VEP ``Feature`` (an RNA id) to the ``feature_qualifier`` value on
+def _cds_product(feature, feature_type: str, qualifiers: list):
+    """Resolve a VEP ``Feature`` (an RNA) to the ``feature_qualifier`` value on
     one of its ``feature_type`` (CDS) descendants.
 
     The attribute key is matched case-insensitively; the first matching value on
-    the first qualifying descendant wins. Returns None if the feature is absent
-    from the collection or carries no such descendant/qualifier."""
-    feature = features.get(feature_id)
+    the first qualifying descendant wins. Returns None if the feature is None or
+    carries no such descendant/qualifier."""
     if feature is None:
         return None
     wanted = {qualifier.lower() for qualifier in qualifiers}
@@ -160,29 +174,74 @@ def _cds_product(features: FeatureCol, feature_id: str, feature_type: str, quali
     return None
 
 
+def _query_label(feature, query_list: list, qualifiers: list, exact_match: bool):
+    """Return the ``--query_genes`` term that selects ``feature``, or None.
+
+    The term is matched against every identifier the feature, its parent and its
+    descendants carry (the same candidates :mod:`theiagene.lib.query` matches
+    when extracting the variants), so the report is labelled by the name the
+    user asked for -- 'FKS1' rather than the full CDS product it resolved to.
+    None is returned when no queries were supplied or none of them match, which
+    leaves the caller to fall back to the product-derived label."""
+    if not query_list or feature is None:
+        return None
+    return match_query(query_list, feature_identifiers(feature, qualifiers), exact_match)
+
+
+# HGVS writes a synonymous protein change as ``p.Asp164=`` ('=' meaning "residue
+# unchanged"); this captures the prefix, the reference residue (3- or 1-letter
+# code) and its position so the residue can be repeated in place of the '='
+_SYNONYMOUS = re.compile(r"^(p\.)([A-Z][a-z]{2}|[A-Z])(\d+)=$")
+
+
+def _expand_synonymous(suffix: str) -> str:
+    """Rewrite a synonymous HGVS protein change into its expanded form
+    (``p.Asp164=`` -> ``p.Asp164Asp``).
+
+    A change naming no single reference residue -- ``p.=`` (whole protein
+    unchanged) or a range such as ``p.Asp164_Leu166=`` -- has nothing
+    unambiguous to repeat, so it is returned untouched. Anything that is not a
+    synonymous change passes through unchanged."""
+    match = _SYNONYMOUS.match(suffix)
+    if not match:
+        return suffix
+    prefix, residue, position = match.groups()
+    return f"{prefix}{residue}{position}{residue}"
+
+
 def _hgvs_suffix(value: str, strip_parens: bool = False):
     """Return the portion of an HGVS string after the ``transcript:`` /
     ``protein:`` prefix, or None when the column is undefined.
+
+    VEP percent-encodes the characters that are reserved in a VCF INFO field
+    (``=``, ``;``, ``,``, ``&``, ``%``) even in its ``--tab`` output, so the
+    suffix is URL-decoded here -- otherwise a synonymous change arrives as
+    ``p.Asp164%3D``. The decoded ``=`` is then expanded to repeat the reference
+    residue (see :func:`_expand_synonymous`).
 
     ``strip_parens`` drops the parentheses VEP wraps predicted protein changes in
     (``p.(Lys143Arg)`` -> ``p.Lys143Arg``)."""
     if value is None or value in _UNDEFINED:
         return None
-    suffix = value.split(":", 1)[1] if ":" in value else value
+    suffix = unquote(value.split(":", 1)[1] if ":" in value else value)
     if strip_parens:
         suffix = suffix.replace("(", "").replace(")", "")
-    return suffix
+    return _expand_synonymous(suffix)
 
 
-def report_line(row: dict, product: str, depth_index: dict = None) -> str:
-    """Build the product-named report line for a single kept VEP row.
+def report_line(row: dict, product: str, depth_index: dict = None, label: str = None) -> str:
+    """Build the report line for a single kept VEP row.
 
-    The transcript/protein prefixes of HGVSc/HGVSp are translated to ``product``
-    (spaces -> '.') and factored out as a shared label; the consequence and the
-    surviving HGVS suffixes follow in parentheses. When ``depth_index`` is given
-    and the row's variant resolves in it, the per-allele read depths are appended
-    after a ``;`` (e.g. ``... p.Lys143Arg; T:0 C:562``)."""
-    dotted = product.replace(" ", ".")
+    The line leads with ``label`` -- the query-gene term the variant was
+    extracted under (e.g. ``FKS1``) -- followed by the quoted CDS product; the
+    consequence and the surviving HGVS suffixes follow in parentheses. Quoting
+    the product keeps a name carrying commas ('1,3-beta-glucan synthase ...')
+    intact once the caller joins the lines with ','. Without a ``label`` (no
+    ``--query_genes``, or none matched) the product itself is normalized into
+    one (spaces -> '.'), preserving the previous behaviour. When ``depth_index``
+    is given and the row's variant resolves in it, the per-allele read depths
+    are appended after a ``;`` (e.g. ``... p.Lys143Arg; T:0 C:562``)."""
+    label = label or normalize_name(product)
     consequence = row.get("Consequence", "")
     pieces = [consequence]
     hgvsc = _hgvs_suffix(row.get("HGVSc"))
@@ -196,7 +255,7 @@ def report_line(row: dict, product: str, depth_index: dict = None) -> str:
         depths = _depth_suffix(row, depth_index)
         if depths:
             body += f"; {depths}"
-    return f"{dotted}: {product} ({body})"
+    return f'{label}: "{product}" ({body})'
 
 
 def report_variants(
@@ -206,12 +265,16 @@ def report_variants(
     feature_type: str,
     qualifiers: list,
     depth_index: dict = None,
+    query_list: list = None,
+    exact_match: bool = False,
 ) -> list:
-    """Turn a VEP TSV into product-named report lines.
+    """Turn a VEP TSV into query-labelled report lines.
 
     A row is dropped when any of its consequence terms is suppressed, when it
     carries neither an HGVSc nor an HGVSp string, or when its ``Feature`` cannot
-    be resolved to a CDS product in ``features``. When ``depth_index`` is given
+    be resolved to a CDS product in ``features``. Each kept line leads with the
+    ``query_list`` term that matched the row's feature, falling back to the
+    product-derived label when no query matched. When ``depth_index`` is given
     (see :func:`build_depth_index`), each kept line carries the variant's
     per-allele read depths."""
     lines = []
@@ -222,14 +285,21 @@ def report_variants(
         if row.get("HGVSc") in _UNDEFINED and row.get("HGVSp") in _UNDEFINED:
             continue
         feature_id = row.get("Feature")
-        product = _cds_product(features, feature_id, feature_type, qualifiers)
+        feature = features.get(feature_id)
+        product = _cds_product(feature, feature_type, qualifiers)
         if product is None:
             logger.warning(
                 f"no {feature_type} {qualifiers} qualifier resolved for feature "
                 f"{feature_id!r}; skipping variant {row.get('Uploaded_variation')}"
             )
             continue
-        lines.append(report_line(row, product, depth_index))
+        label = _query_label(feature, query_list, qualifiers, exact_match)
+        if query_list and label is None:
+            logger.warning(
+                f"no query gene matched feature {feature_id!r}; labelling variant "
+                f"{row.get('Uploaded_variation')} by its product instead"
+            )
+        lines.append(report_line(row, product, depth_index, label))
     return lines
 
 
@@ -237,6 +307,24 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """Register the report_variants arguments on ``parser``"""
     parser.add_argument("--vep_tsv", required=True)
     parser.add_argument("--reference_gff", required=True)
+    parser.add_argument(
+        "--query_genes",
+        nargs="+",
+        help="comma-/space-delimited query gene name(s); each report line is "
+        "labelled by the query term matching its feature rather than by the "
+        "resolved CDS product",
+    )
+    parser.add_argument(
+        "--bedfile",
+        help="BED whose name column supplies the query names when --query_genes "
+        "is not given",
+    )
+    parser.add_argument(
+        "--exact_match",
+        action="store_true",
+        help="require a query term to equal a feature identifier rather than be "
+        "a substring of one (always case-sensitive)",
+    )
     parser.add_argument(
         "--vcf",
         help="VCF the VEP annotations were called from; when given, each report "
@@ -267,8 +355,24 @@ def run_cli(args: argparse.Namespace) -> int:
     qualifiers = split_qualifiers(args.feature_qualifier)
     depth_index = build_depth_index(args.vcf) if args.vcf else None
 
+    # query labels: explicit --query_genes take precedence over BED names, matching
+    # how extract_variants selected the variants being reported on
+    if args.query_genes:
+        query_list = ordered_query_genes(args.query_genes)
+    elif args.bedfile:
+        query_list = sorted(extract_queries_from_bed(args.bedfile))
+    else:
+        query_list = []
+
     lines = report_variants(
-        args.vep_tsv, features, suppress, args.feature_type, qualifiers, depth_index
+        args.vep_tsv,
+        features,
+        suppress,
+        args.feature_type,
+        qualifiers,
+        depth_index,
+        query_list,
+        args.exact_match,
     )
 
     if args.output:
