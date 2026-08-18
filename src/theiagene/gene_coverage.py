@@ -10,7 +10,13 @@ Query genes are selected from the GFF by matching ``--query_genes`` (or the BED
 names) against each candidate feature's identifiers -- the ``--feature_qualifier``
 attribute(s) (default ``product``) plus the feature/parent/descendant ids -- and
 depth/coverage/reads are compiled from the matched unit's ``--feature_type``
-(default ``CDS``) segments."""
+(default ``CDS``) segments.
+
+All three measurements describe one read set: unmapped, secondary,
+supplementary, QC_fail and duplicate alignments are excluded, ``--min_mapping_quality``
+gates which alignments count, and ``--min_base_quality`` gates which bases count
+(a read with no qualifying base in a region is not counted as mapped there).
+See :func:`read_passes_filters`."""
 
 import sys
 import logging
@@ -31,6 +37,7 @@ from theiagene.lib.query import (
     gff_query_ranges,
     bed_query_ranges,
     collapse_to_single_contig,
+    unresolved_queries,
     validate_region,
 )
 from theiagene.lib.logging_config import configure_logging
@@ -60,27 +67,71 @@ def union_intervals(intervals: list) -> list:
     return merged
 
 
+def read_passes_filters(read, min_mapping_quality: int = 0) -> bool:
+    """Return True when an alignment may contribute to this command's numbers.
+
+    Unmapped, secondary, supplementary, QC_fail and duplicate alignments are
+    excluded, and ``min_mapping_quality`` is applied inclusively.
+
+    This one predicate backs both reported quantities: :func:`count_mapped_reads`
+    calls it directly, and :func:`quantify_gene_coverage` hands it to pysam's
+    ``count_coverage`` as the ``read_callback``, so ``reads_mapped`` describes
+    exactly the alignments ``average_depth``/``percent_coverage`` were computed
+    from. pysam's default callback ('all') would not do that -- it skips only
+    unmapped/secondary/QC_fail/duplicate alignments, letting supplementary
+    alignments and any mapping quality into depth while the read total excluded
+    them."""
+    if (read.is_unmapped or read.is_secondary or read.is_supplementary
+            or read.is_qcfail or read.is_duplicate):
+        return False
+    return read.mapping_quality >= min_mapping_quality
+
+
+def _has_qualifying_base(read, start: int, end: int, min_base_quality: int) -> bool:
+    """Return True when ``read`` aligns at least one base within ``[start, end)``
+    whose base quality is at or above ``min_base_quality``.
+
+    This is the read-level counterpart of the base-level threshold
+    ``count_coverage`` applies: a read whose bases over the region are all below
+    the threshold contributes nothing to depth there, so it is not counted as
+    mapped either. A read carrying no quality string ('*') passes, matching
+    htslib, which treats those bases as quality 255."""
+    qualities = read.query_qualities
+    if qualities is None:
+        return True
+    for query_pos, reference_pos in read.get_aligned_pairs(matches_only=True):
+        if start <= reference_pos < end and qualities[query_pos] >= min_base_quality:
+            return True
+    return False
+
+
 def count_mapped_reads(
     imported_bam: pysam.AlignmentFile,
     contig: str,
     start: int,
     end: int,
     min_mapping_quality: int = 0,
+    min_base_quality: int = 0,
 ) -> set:
     """Identify the reads mapped over ``[start, end)`` on ``contig``.
 
     Returns a set of alignment identifiers rather than a count so the caller can
     pool ranges sharing a label (e.g. all CDS segments of one query gene) and
-    count a read spanning several of them once. QC_fail/duplicate/secondary/
-    supplementary alignments are excluded to match the reads ``count_coverage``
-    feeds into depth and breadth, and ``min_mapping_quality`` filters reads by
-    alignment confidence as ``min_quality`` filters bases by base quality."""
+    count a read spanning several of them once.
+
+    Reads are filtered by :func:`read_passes_filters` -- the same predicate the
+    depth/breadth figures are computed under. A ``min_base_quality`` above 0
+    additionally drops a read that aligns no base at or above that quality within
+    the region, since such a read contributes nothing to the depth measured there
+    (see :func:`_has_qualifying_base`); at the default of 0 every overlapping
+    read is kept and no per-base inspection is done."""
     read_ids = set()
     for read in imported_bam.fetch(contig, start, end):
-        if (read.is_unmapped or read.is_secondary or read.is_supplementary
-                or read.is_qcfail or read.is_duplicate):
+        if not read_passes_filters(read, min_mapping_quality):
             continue
-        if read.mapping_quality < min_mapping_quality:
+        if min_base_quality > 0 and not _has_qualifying_base(
+            read, start, end, min_base_quality
+        ):
             continue
         # flag distinguishes the mates of a pair sharing one query name
         read_ids.add((read.query_name, read.flag, read.reference_start))
@@ -91,7 +142,7 @@ def quantify_gene_coverage(
     imported_bam: pysam.AlignmentFile,
     contig2ranges: dict,
     min_depth: int = 1,
-    min_quality: int = 0,
+    min_base_quality: int = 0,
     expected_labels: list = None,
     min_mapping_quality: int = 0,
 ) -> tuple:
@@ -104,9 +155,22 @@ def quantify_gene_coverage(
     overlapping ranges (e.g. isoform CDS) is counted once rather than twice. A
     read overlapping several of a label's ranges is likewise counted once.
 
-    ``expected_labels`` (typically the resolved query list) seeds every output
-    dict with 0 so a requested query that resolved to no coordinates is still
-    reported as absent rather than silently dropped."""
+    Depth and reads are measured over one read set: ``read_passes_filters`` is
+    applied to the read total and handed to ``count_coverage`` as its
+    ``read_callback``, so ``min_mapping_quality`` and the alignment-flag
+    exclusions govern both. ``min_base_quality`` likewise governs both -- it is
+    ``count_coverage``'s per-base threshold, and a read with no base at or above
+    it in a region is not counted as mapped there.
+
+    ``expected_labels`` (typically the queries that resolved to no coordinates,
+    see :func:`theiagene.lib.query.unresolved_queries`) seeds every output dict
+    with 0 so a requested query missing from the annotation is still reported as
+    absent rather than silently dropped."""
+    def read_callback(read):
+        # count_coverage's own filtering is looser than this command's; passing a
+        # callback makes depth and reads_mapped describe the same alignments
+        return read_passes_filters(read, min_mapping_quality)
+
     reference_names = set(imported_bam.references)
     # label -> contig -> [(start, end), ...], validated as we group
     label_ranges = defaultdict(lambda: defaultdict(list))
@@ -131,12 +195,13 @@ def quantify_gene_coverage(
         for contig, intervals in contig_map.items():
             # union overlapping ranges so shared bases are counted once
             for start, end in union_intervals(intervals):
-                # excludes QC_fail/duplicate/secondary/supplementary reads
                 coverage_data = imported_bam.count_coverage(
-                    contig, start, end, quality_threshold=min_quality
+                    contig, start, end, quality_threshold=min_base_quality,
+                    read_callback=read_callback,
                 )
                 read_ids |= count_mapped_reads(
-                    imported_bam, contig, start, end, min_mapping_quality
+                    imported_bam, contig, start, end, min_mapping_quality,
+                    min_base_quality,
                 )
                 for i, _ in enumerate(range(start, end)):
                     # calculate total depth across bases
@@ -212,12 +277,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--exact_match", action="store_true")
     parser.add_argument("--ambiguous_contig", action="store_true")
     parser.add_argument("--min_depth", type=int, default=1)
-    parser.add_argument("--min_quality", type=int, default=0)
+    parser.add_argument(
+        "--min_base_quality",
+        "--min_quality",
+        type=int,
+        default=0,
+        help="minimum base quality for a base to count toward depth/breadth and "
+        "for the read carrying it to count as mapped; '--min_quality' is a "
+        "deprecated alias",
+    )
     parser.add_argument(
         "--min_mapping_quality",
         type=int,
         default=0,
-        help="minimum alignment mapping quality for a read to count as mapped",
+        help="minimum alignment mapping quality for a read to count as mapped "
+        "and to contribute to depth/breadth",
     )
     parser.add_argument(
         "--min_reads_mapped",
@@ -274,9 +348,11 @@ def run_cli(args: argparse.Namespace) -> int:
         contig2ranges = collapse_to_single_contig(contig2ranges, bam_contigs[0])
 
     # quantify statistics and write
+    # only queries that resolved to nothing need seeding; a resolved query is
+    # already keyed by its own label, which may carry a paralog suffix
     depth_dict, coverage_dict, reads_dict = quantify_gene_coverage(
-        imported_bam, contig2ranges, args.min_depth, args.min_quality, query_list,
-        args.min_mapping_quality
+        imported_bam, contig2ranges, args.min_depth, args.min_base_quality,
+        unresolved_queries(query_list, contig2ranges), args.min_mapping_quality
     )
     pass_dict = flag_reads_mapped(reads_dict, args.min_reads_mapped)
     write_json("DEPTH_DICT.json", depth_dict)
