@@ -1,7 +1,7 @@
 # theiagene.lib.feature
 
 The feature data model shared by every theiagene command. It turns the flat,
-line-oriented rows of a GFF3/GenBank annotation into a navigable tree of genes,
+line-oriented rows of a GFF3 annotation into a navigable tree of genes,
 their RNAs, and the CDS/exon segments beneath them — then lets you reach any
 class of feature by name, look one up by ID, sort the whole thing into a
 canonical order, and serialize it back out to GFF3.
@@ -32,21 +32,34 @@ named class straight off the collection.
 from theiagene.lib.feature import Feature, FeatureCol
 
 # usually built by a parser (see theiagene.lib.parsers.assimilate_gff);
-# shown here constructed by hand
-gene = Feature(seqid="chr1", type="gene", start=0, end=900,
-               attributes={"ID": "gene-FKS1", "Name": "FKS1"})
-rna  = Feature(seqid="chr1", type="mRNA", start=0, end=900,
+# shown here constructed by hand. ingest=True is what derives each feature's
+# fid/pid from its ID/Parent attributes -- without it fid stays None and the
+# Parent<->ID wiring below has nothing to match against
+gene = Feature(seqid="chr1", source="example", type="gene", start=0, end=900,
+               attributes={"ID": "gene-FKS1", "Name": "FKS1"}, ingest=True)
+rna  = Feature(seqid="chr1", source="example", type="mRNA", start=0, end=900,
                attributes={"ID": "rna-1", "Parent": "gene-FKS1"}, ingest=True)
-cds  = Feature(seqid="chr1", type="CDS", start=100, end=800,
+cds  = Feature(seqid="chr1", source="example", type="CDS", start=100, end=800,
                attributes={"ID": "cds-1", "Parent": "rna-1"}, ingest=True)
 
 col = FeatureCol([gene, rna, cds])   # groups by Parent<->ID on construction
 
-col                                  # FeatureCol(1 genes, 1 RNAs, 1 CDS, 0 exons)
-col["mRNA"]                          # [<rna-1>]  (raw GFF type resolves to the 'rna' class)
-col.rnas[0].descendants              # [<cds-1>]  (hierarchy wired up)
+repr(col)                            # 'FeatureCol(1 genes, 1 RNAs, 1 CDS, 0 exons)'
+col["mRNA"]                          # [rna-1]  (raw GFF type resolves to the 'rna' class)
+col.rnas[0].descendants              # [cds-1]  (hierarchy wired up)
 col.get("cds-1").parent.fid          # 'rna-1'
 print(gene.to_gff())                 # serialize the gene + its subtree to GFF3
+```
+
+`Feature` defines no `__repr__`, so the lists above print as the default
+`<theiagene.lib.feature.Feature object at 0x...>`; they are shown by `fid` for
+readability. The `to_gff` call emits the subtree, converted back to GFF3's
+1-based, both-inclusive coordinates:
+
+```
+chr1	example	gene	1	900	.	.	.	ID=gene-FKS1;Name=FKS1
+chr1	example	mRNA	1	900	.	.	.	ID=rna-1;Parent=gene-FKS1
+chr1	example	CDS	101	800	.	.	.	ID=cds-1;Parent=rna-1
 ```
 
 Coordinates are stored **0-based, half-open** internally (BED-style), regardless
@@ -72,12 +85,12 @@ Feature(fid=None, pid=None, seqid=None, source=None, type=None,
 
 | name | type | description |
 | --- | --- | --- |
-| `fid` | `str` | Feature ID. If falsy and `ingest=True`, derived from the `ID`/`Id`/`id` attribute. A feature with no resolvable ID raises `AttributeError`. |
+| `fid` | `str` | Feature ID. If falsy and `ingest=True`, derived from the `ID`/`Id`/`id` attribute. A feature with no resolvable ID is left with `fid=None` rather than raising — GFF3 only requires `ID` on features that have children or span multiple lines, so callers that need an ID for every record (as `FeatureCol` grouping does) call `synthesize_id` to mint one. |
 | `pid` | `str` | Parent ID. If falsy and `ingest=True`, derived from the `Parent`/`parent` attribute. |
 | `seqid` | `str` | Contig/sequence name (GFF column 1). |
 | `source` | `str` | Annotation source (GFF column 2). |
 | `type` | `str` | Feature type such as `gene`, `mRNA`, `CDS`, `exon` (GFF column 3). |
-| `start`, `end` | `int` \| GFF placeholder | Interval bounds, **0-based half-open**. Coerced with `_as_int` and stored sorted so `start <= end` always holds. An undefined placeholder (`.`/`?`/`""`/`None`) stores `None`. |
+| `start`, `end` | `int` | Interval bounds, **0-based half-open**. Required: both are coerced with `_as_int` and stored sorted so `start <= end` always holds, but an undefined placeholder (`.`/`?`/`""`/`None`) raises `ValueError` — a feature without coordinates cannot be built. `0` is a valid coordinate and is not treated as undefined. |
 | `score` | `int` \| placeholder | GFF column 6; undefined → `None`. |
 | `strand` | `+`/`-`/`1`/`-1`/placeholder | Coerced to a BioPython-style strand integer (`1`, `-1`) or `None`. |
 | `phase` | `int` \| placeholder | GFF column 8; undefined → `None`. |
@@ -98,16 +111,29 @@ Feature(fid=None, pid=None, seqid=None, source=None, type=None,
   Serialize this feature *and all of its descendants* to a GFF3 string, emitted
   depth-first (each parent before its children), joined by newlines with no
   trailing newline. Coordinates are converted back to GFF3's 1-based,
-  both-inclusive columns; undefined numeric/strand fields render as `.`.
+  both-inclusive columns; undefined numeric/strand fields (`score`, `phase`,
+  `strand`) render as `.`. The string columns (`seqid`, `source`, `type`) are
+  written as-is and have no placeholder — serializing a feature that is missing
+  one raises `TypeError`, so set them on any feature you intend to write back
+  out.
+
+- **`synthesize_id(count) -> str`**
+  Assign and return a synthetic `fid` for a record that carried no `ID`, built
+  as `{type}{count}` (lowercased type plus a per-type occurrence count) and
+  suffixed with `_{pid}` when a parent is known, which keeps multi-segment rows
+  sharing one parent distinct. The value is written back into
+  `attributes["ID"]` so it survives a round-trip through `to_gff`.
+  `theiagene.lib.parsers.iter_gff_features` calls this for every ID-less record
+  it reads.
 
   > `_ingest()`, `_to_gff_line()` (single-line serialization, no descendants)
   > are internal helpers.
 
 **Raises**
 
-- `AttributeError` — no `fid` could be resolved.
-- `ValueError` — a defined `start`/`end`/`score`/`phase` is not an integer, an
-  invalid strand token, or a `sequence` shorter than the coordinate span.
+- `ValueError` — `start` or `end` is undefined; a defined
+  `start`/`end`/`score`/`phase` is not an integer; an invalid strand token; or a
+  `sequence` shorter than the coordinate span.
 
 ---
 
