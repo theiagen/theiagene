@@ -54,7 +54,7 @@ def match_query(query_list, identifiers, exact_match: bool):
             if exact_match:
                 if query == ident or nq == ni:
                     return query
-            elif query in ident or nq in ni:
+            elif query.lower() in ident.lower() or nq.lower() in ni.lower():
                 return query
     return None
 
@@ -161,10 +161,16 @@ def _grouped_query_ranges(
     exact_match: bool,
 ) -> dict:
     """Flatten the ``feature_type`` coordinates of the query units selected at
-    the ``group_by`` level to ``{<CONTIG>: [(START, END, LABEL), ...]}``
-    (0-based, half-open); see :func:`gff_query_ranges`."""
+    the ``group_by`` level to ``{<CONTIG>: [(START, END, MATCHED, LABEL), ...]}``
+    (0-based, half-open).
+
+    Both the query term that selected the unit (``MATCHED``, ``None`` when no
+    query list was supplied) and the unit's own resolved gene name (``LABEL``)
+    are carried so :func:`_finalize_labels` can key each range by the query term
+    while still telling paralogs apart; see :func:`gff_query_ranges`."""
     contig2ranges = defaultdict(list)
     for feature in features[group_by]:
+        matched = None
         if query_list:
             matched = match_query(
                 query_list, feature_identifiers(feature, feature_qualifiers), exact_match
@@ -180,8 +186,36 @@ def _grouped_query_ranges(
         for subfeature in subfeatures[feature_type]:
             start, end = subfeature.start, subfeature.end
             validate_region(start, end, label, contig)
-            contig2ranges[contig].append((start, end, label))
+            contig2ranges[contig].append((start, end, matched, label))
     return contig2ranges
+
+
+def _finalize_labels(contig2ranges: dict) -> dict:
+    """Collapse ``{<CONTIG>: [(START, END, MATCHED, LABEL), ...]}`` to
+    ``{<CONTIG>: [(START, END, KEY), ...]}``, keying each range by the query term
+    that selected it.
+
+    The resolved gene name is folded into the key only where one query term
+    matched several distinct genes (paralogs, e.g. a substring query for ``ERG1``
+    matching both ``ERG1`` and ``ERG11``), which must stay distinct rows rather
+    than pooling into one measurement. The query-term-to-gene map is built across
+    every contig first, because paralogs commonly sit on different contigs."""
+    term2labels = defaultdict(set)
+    for ranges in contig2ranges.values():
+        for _, _, matched, label in ranges:
+            term2labels[matched].add(label)
+    finalized = defaultdict(list)
+    for contig, ranges in contig2ranges.items():
+        for start, end, matched, label in ranges:
+            if matched is None:
+                # no query list: every unit is kept and named by its own gene
+                key = label
+            elif len(term2labels[matched]) > 1 and matched != label:
+                key = f"{matched}.{label}"
+            else:
+                key = matched
+            finalized[contig].append((start, end, key))
+    return finalized
 
 
 def gff_query_ranges(
@@ -201,9 +235,12 @@ def gff_query_ranges(
     annotation carrying only bare ``feature_type`` records with no gene parent.
 
     When ``query_list`` is non-empty a unit is kept only if one of its
-    identifiers matches a query term; the query term is used only to filter, and
-    every kept unit is labelled by its own resolved gene name so distinct genes
-    remain distinct rows (a query matching two paralogs yields two labels)."""
+    identifiers matches a query term, and is labelled by that term as written --
+    so results are reported under the name that was asked for. Where a single
+    term matched several distinct genes the resolved gene name is appended
+    (``ERG1`` -> ``ERG1.ERG1``, ``ERG1.ERG11``) so paralogs remain distinct rows
+    instead of pooling into one measurement. With an empty ``query_list`` every
+    unit is kept and labelled by its own resolved gene name."""
     # fallback order: the gene that owns the feature_type, then the raw
     # feature_type itself for annotations that carry no gene record
     for group_by in ("gene", feature_type):
@@ -211,8 +248,10 @@ def gff_query_ranges(
             features, query_list, group_by, feature_type, feature_qualifiers, exact_match
         )
         if contig2ranges:
-            return contig2ranges
-    return contig2ranges
+            break
+    # labels are resolved only once a grouping level has won, because the
+    # query-term-to-gene map must be built from the complete result set
+    return _finalize_labels(contig2ranges)
 
 
 def bed_query_ranges(bedfile: str, query_set: set) -> dict:
@@ -230,6 +269,23 @@ def bed_query_ranges(bedfile: str, query_set: set) -> dict:
         validate_region(start, end, name, contig)
         contig2ranges[contig].append((start, end, name))
     return contig2ranges
+
+
+def unresolved_queries(query_list: list, contig2ranges: dict) -> list:
+    """Return the query terms that resolved to no coordinates at all.
+
+    These are the queries worth seeding as zeroes in the output so a requested
+    gene missing from the annotation is reported as absent rather than silently
+    dropped. A term that did resolve is excluded even when its label carries a
+    paralog suffix (``ERG1`` -> ``ERG1.ERG11``), which would otherwise emit a
+    phantom zero row for the bare term alongside its real measurements."""
+    resolved = {label for ranges in contig2ranges.values() for _, _, label in ranges}
+    return [
+        query
+        for query in query_list
+        if query not in resolved
+        and not any(label.startswith(f"{query}.") for label in resolved)
+    ]
 
 
 def collapse_to_single_contig(contig2ranges: dict, contig: str) -> dict:
