@@ -17,7 +17,7 @@ LABEL maintainer.email="zachary.konkel@theiagen.com"
 
 ENV LC_ALL=C
 
-# install the theiagene package (pulls in pysam + biopython)
+# install the theiagene package (pulls in pysam)
 WORKDIR /theiagene
 COPY pyproject.toml README.md ./
 COPY src/ ./src/

@@ -15,7 +15,6 @@ authors = [
 keywords = ["bioinformatics", "genomics", "variant-annotation", "coverage", "pysam"]
 dependencies = [
     "pysam",
-    "biopython",
 ]
 
 [project.urls]
