@@ -131,8 +131,12 @@ def assimilate_gff(gff: str) -> FeatureCol:
     """Group every GFF3 record onto its root ancestor Feature via ``Parent``/``ID`` links.
 
     Returns a :class:`FeatureCol`, which wires up the parent/descendant hierarchy
-    on construction (gene/RNA ids are unique; multi-segment CDS reuse one id
-    harmlessly -- first occurrence wins)."""
+    on construction. Records sharing an id -- the multi-segment CDS of one RNA,
+    which GFF3 permits to repeat a single ``ID`` -- are de-replicated by
+    suffixing a count (``cds-1``, ``cds-1_1``, ``cds-1_2``, ...), so each segment
+    is indexed distinctly rather than collapsing onto the first occurrence. A
+    ``Parent`` pointing at such a repeated id is ambiguous and raises
+    ``KeyError``."""
     return FeatureCol(iter_gff_features(gff))
 
 
