@@ -42,8 +42,12 @@ from theiagene.lib.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 
-# VEP's undefined-column placeholder
-_UNDEFINED = {"-", "", "."}
+# VEP's undefined-column placeholders. None is included so a column that is
+# absent from the TSV entirely (VEP run without --hgvs) or missing from a short
+# data row -- both of which surface as a `.get` miss -- reads as undefined
+# rather than as a value, which would otherwise let a row carrying no HGVS
+# string at all past the filter in `report_variants`.
+_UNDEFINED = {"-", "", ".", None}
 
 
 def parse_vep_tsv(vep_tsv: str):
@@ -221,7 +225,7 @@ def _hgvs_suffix(value: str, strip_parens: bool = False):
 
     ``strip_parens`` drops the parentheses VEP wraps predicted protein changes in
     (``p.(Lys143Arg)`` -> ``p.Lys143Arg``)."""
-    if value is None or value in _UNDEFINED:
+    if value in _UNDEFINED:
         return None
     suffix = unquote(value.split(":", 1)[1] if ":" in value else value)
     if strip_parens:
