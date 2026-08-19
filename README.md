@@ -36,23 +36,16 @@ written to the working directory as `DEPTH_DICT.json`, `COVERAGE_DICT.json`,
 `READS_DICT.json`, `READS_PASS_DICT.json`, `LENGTHS_DICT.json` and
 `COVERAGE_STATS.tsv`. A gene whose mapped reads fall below `--min_reads_mapped`
 (default 1) is flagged as failing in `READS_PASS_DICT.json`, but keeps its
-measured depth, breadth, and read count — the flag is a call layered onto the
-measurements, not a filter of them.
+measured depth, breadth, and read count.
 
 `LENGTHS_DICT.json` gives the number of reference bases each gene's depth and breadth
 were computed over — the denominator of both ratios. Its bases are counted after
 the gene's ranges are merged, so a base shared by two overlapping segments (e.g.
 isoform CDS) contributes once, and a gene split across several segments or
-contigs reports their combined length. It is what separates a gene whose 100%
-coverage spans its full CDS from one whose annotation only resolved a fragment.
+contigs reports their combined length.
 
 A query gene that resolves to no coordinates in the annotation is reported as
-`NA` in all five outputs, not 0: nothing was measured for it, which is a
-different claim from having measured no coverage. Consumers reading these JSON
-files as numbers must handle the `NA` string.
-
-All three measurements are taken over one read set, so `reads_mapped` describes
-the alignments the depth and breadth were computed from:
+`NA` in all five outputs.
 
 | filter | effect |
 | --- | --- |
@@ -60,9 +53,6 @@ the alignments the depth and breadth were computed from:
 | `--min_mapping_quality` (default 0) | an alignment below it counts toward neither reads nor depth/breadth |
 | `--min_base_quality` (default 0) | a base below it counts toward neither depth nor breadth, and a read with no qualifying base in a region is not mapped to it |
 | `--min_depth` (default 1) | a base at or above this depth counts as covered, setting breadth |
-
-`--min_base_quality` was previously `--min_quality`, which still works as a
-deprecated alias.
 
 ```bash
 theiagene gene_coverage \
@@ -79,8 +69,8 @@ theiagene gene_coverage \
 
 Write a sub-VCF containing only the variants that overlap the `feature_type`
 (CDS by default) segments of the query genes. Coordinates come from a reference
-GFF or a BED file; each kept record is annotated with the overlapping query
-name(s) in a `GENE` INFO field. Output defaults to `EXTRACTED_VARIANTS.vcf`.
+GFF or a BED file; each kept record is annotated with the query that retrieved it
+in a `GENE` INFO field. Output defaults to `EXTRACTED_VARIANTS.vcf`.
 
 ```bash
 theiagene extract_variants \
@@ -105,7 +95,7 @@ transcript/protein prefixes stripped from its HGVS strings, e.g.:
 ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)
 ```
 
-The label is the `--query_genes` term (or, failing that, the `--bedfile` name)
+The label is the `--query_genes` term (or, failing that, the `--bedfile` name column)
 matching the row's feature — the name that was asked about rather than the full
 product it resolved to. With no query list, or when none of its terms match, the
 label falls back to the normalized product name
