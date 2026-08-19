@@ -296,7 +296,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="minimum base quality for a base to count toward depth/breadth and "
-        "for the read carrying it to count as mapped
+        "for the read carrying it to count as mapped"
     )
     parser.add_argument(
         "--min_mapping_quality",
