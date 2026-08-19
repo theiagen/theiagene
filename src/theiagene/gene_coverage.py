@@ -2,9 +2,13 @@
 
 Given a BAM and query-gene coordinates (from a reference GFF or a BED file),
 this command reports the average depth, percent coverage, number of mapped
-reads, and whether that read total meets ``--min_reads_mapped`` for each query
+reads, whether that read total meets ``--min_reads_mapped``, and the length of
+reference sequence the depth and coverage were quantified over for each query
 gene as JSON (``DEPTH_DICT.json``, ``COVERAGE_DICT.json``, ``READS_DICT.json``,
-``READS_PASS_DICT.json``) and a readable ``COVERAGE_STATS.tsv``.
+``READS_PASS_DICT.json``, ``LENGTHS_DICT.json``) and a readable
+``COVERAGE_STATS.tsv``. A requested query that resolves to no coordinates in the
+annotation is reported as ``NA`` in all five rather than as 0, which would claim
+a measurement that was never taken.
 
 Query genes are selected from the GFF by matching ``--query_genes`` (or the BED
 names) against each candidate feature's identifiers -- the ``--feature_qualifier``
@@ -44,6 +48,11 @@ from theiagene.lib.logging_config import configure_logging
 
 
 logger = logging.getLogger(__name__)
+
+# reported in place of a measurement for a query that resolved to no
+# coordinates at all: there is nothing to measure, which is not the same claim
+# as a measured absence of coverage
+NOT_APPLICABLE = "NA"
 
 
 def input_error_handling(args: argparse.Namespace) -> None:
@@ -146,14 +155,21 @@ def quantify_gene_coverage(
     expected_labels: list = None,
     min_mapping_quality: int = 0,
 ) -> tuple:
-    """Quantify breadth/depth of coverage and mapped reads over query-gene coordinates.
+    """Quantify breadth/depth of coverage, mapped reads, and quantified length
+    over query-gene coordinates.
+
+    Returns ``(depth, coverage, reads, lengths)``, each a label-keyed dict sorted
+    by label. ``lengths`` gives the number of reference bases each label's
+    depth/breadth was computed over -- the denominator of the other two ratios --
+    so a partially annotated query is distinguishable from a fully quantified one.
 
     ``contig2ranges`` maps each contig to ``[(START, END, LABEL), ...]`` (0-based,
     half-open) as produced by :func:`gff_query_ranges`/:func:`bed_query_ranges`;
     every range sharing a ``LABEL`` (e.g. all CDS segments of one query gene) is
     pooled into a per-base union before counting, so a base covered by two
-    overlapping ranges (e.g. isoform CDS) is counted once rather than twice. A
-    read overlapping several of a label's ranges is likewise counted once.
+    overlapping ranges (e.g. isoform CDS) is counted once rather than twice --
+    in the reported length as well as in depth and breadth. A read overlapping
+    several of a label's ranges is likewise counted once.
 
     Depth and reads are measured over one read set: ``read_passes_filters`` is
     applied to the read total and handed to ``count_coverage`` as its
@@ -164,8 +180,10 @@ def quantify_gene_coverage(
 
     ``expected_labels`` (typically the queries that resolved to no coordinates,
     see :func:`theiagene.lib.query.unresolved_queries`) seeds every output dict
-    with 0 so a requested query missing from the annotation is still reported as
-    absent rather than silently dropped."""
+    with ``NOT_APPLICABLE`` so a requested query missing from the annotation is
+    still reported rather than silently dropped -- and is reported as having no
+    measurement, which a seed of 0 would have misstated as a measured absence of
+    coverage. A label that does resolve overwrites its seed with real numbers."""
     def read_callback(read):
         # count_coverage's own filtering is looser than this command's; passing a
         # callback makes depth and reads_mapped describe the same alignments
@@ -183,9 +201,10 @@ def quantify_gene_coverage(
             validate_region(start, end, label, contig, contig_len)
             label_ranges[label][contig].append((start, end))
 
-    depth_dict = {label: 0 for label in expected_labels or []}
-    coverage_dict = {label: 0 for label in expected_labels or []}
-    reads_dict = {label: 0 for label in expected_labels or []}
+    depth_dict = {label: NOT_APPLICABLE for label in expected_labels or []}
+    coverage_dict = {label: NOT_APPLICABLE for label in expected_labels or []}
+    reads_dict = {label: NOT_APPLICABLE for label in expected_labels or []}
+    lengths_dict = {label: NOT_APPLICABLE for label in expected_labels or []}
     for label, contig_map in label_ranges.items():
         total_bases = 0
         summed_depth = 0
@@ -221,11 +240,15 @@ def quantify_gene_coverage(
         coverage_dict[label] = 100 * (covered_bases / total_bases)
         # reads mapped anywhere across this label's pooled ranges
         reads_dict[label] = len(read_ids)
+        # the bases the two ratios above were taken over -- post-union, so a
+        # base shared by overlapping ranges is counted once here too
+        lengths_dict[label] = total_bases
 
     return (
         dict(sorted(depth_dict.items())),
         dict(sorted(coverage_dict.items())),
         dict(sorted(reads_dict.items())),
+        dict(sorted(lengths_dict.items())),
     )
 
 
@@ -234,9 +257,14 @@ def flag_reads_mapped(reads_dict: dict, min_reads_mapped: int = 1) -> dict:
 
     The threshold is inclusive and applied to the reported totals, so the flag
     is a call layered onto the measurements rather than a filter of them -- a
-    gene below the threshold keeps its measured depth, breadth, and reads."""
+    gene below the threshold keeps its measured depth, breadth, and reads.
+
+    A query with no read total to threshold (``NOT_APPLICABLE``, i.e. one that
+    resolved to no coordinates) carries that through instead of being called:
+    it did not fail the threshold, it was never measured against it."""
     return {
-        query: reads >= min_reads_mapped for query, reads in reads_dict.items()
+        query: reads if reads == NOT_APPLICABLE else reads >= min_reads_mapped
+        for query, reads in reads_dict.items()
     }
 
 
@@ -246,17 +274,25 @@ def make_tsv(
     reads_dict: dict,
     pass_dict: dict,
     ambiguous_contig: bool,
+    lengths_dict: dict,
 ) -> str:
-    """Make a readable TSV to convey depth, coverage, and mapped reads"""
+    """Make a readable TSV to convey depth, coverage, mapped reads, and the
+    length quantified
+
+    ``quantified_length`` is appended as the last column so a consumer reading
+    the existing columns by position is unaffected."""
     if ambiguous_contig:
         name = "query (WARNING: results may be inaccurate if sample is not mapped to reference used to generate BED file coordinates)"
     else:
         name = "query"
-    tsv_str = f"#{name}\taverage_depth\tpercent_coverage\treads_mapped\treads_mapped_pass\n"
+    tsv_str = (
+        f"#{name}\taverage_depth\tpercent_coverage\treads_mapped"
+        f"\treads_mapped_pass\tquantified_length\n"
+    )
     for query, depth in depth_dict.items():
         tsv_str += (
             f"{query}\t{depth}\t{coverage_dict[query]}\t{reads_dict[query]}"
-            f"\t{pass_dict[query]}\n"
+            f"\t{pass_dict[query]}\t{lengths_dict[query]}\n"
         )
     return tsv_str
 
@@ -350,7 +386,7 @@ def run_cli(args: argparse.Namespace) -> int:
     # quantify statistics and write
     # only queries that resolved to nothing need seeding; a resolved query is
     # already keyed by its own label, which may carry a paralog suffix
-    depth_dict, coverage_dict, reads_dict = quantify_gene_coverage(
+    depth_dict, coverage_dict, reads_dict, lengths_dict = quantify_gene_coverage(
         imported_bam, contig2ranges, args.min_depth, args.min_base_quality,
         unresolved_queries(query_list, contig2ranges), args.min_mapping_quality
     )
@@ -359,10 +395,11 @@ def run_cli(args: argparse.Namespace) -> int:
     write_json("COVERAGE_DICT.json", coverage_dict)
     write_json("READS_DICT.json", reads_dict)
     write_json("READS_PASS_DICT.json", pass_dict)
+    write_json("LENGTHS_DICT.json", lengths_dict)
 
     tsv_str = make_tsv(
         depth_dict, coverage_dict, reads_dict, pass_dict,
-        args.ambiguous_contig and args.bedfile
+        args.ambiguous_contig and args.bedfile, lengths_dict
     )
     with open("COVERAGE_STATS.tsv", "w") as out:
         out.write(tsv_str)
