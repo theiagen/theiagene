@@ -1,21 +1,5 @@
 """Quantify breadth and depth of coverage over query genes.
 
-Given a BAM and query-gene coordinates (from a reference GFF or a BED file),
-this command reports the average depth, percent coverage, number of mapped
-reads, whether that read total meets ``--min_reads_mapped``, and the length of
-reference sequence the depth and coverage were quantified over for each query
-gene as JSON (``DEPTH_DICT.json``, ``COVERAGE_DICT.json``, ``READS_DICT.json``,
-``READS_PASS_DICT.json``, ``LENGTHS_DICT.json``) and a readable
-``COVERAGE_STATS.tsv``. A requested query that resolves to no coordinates in the
-annotation is reported as ``NA`` in all five rather than as 0, which would claim
-a measurement that was never taken.
-
-Query genes are selected from the GFF by matching ``--query_genes`` (or the BED
-names) against each candidate feature's identifiers -- the ``--feature_qualifier``
-attribute(s) (default ``product``) plus the feature/parent/descendant ids -- and
-depth/coverage/reads are compiled from the matched unit's ``--feature_type``
-(default ``CDS``) segments.
-
 All three measurements describe one read set: unmapped, secondary,
 supplementary, QC_fail and duplicate alignments are excluded, ``--min_mapping_quality``
 gates which alignments count, and ``--min_base_quality`` gates which bases count
@@ -49,9 +33,6 @@ from theiagene.lib.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 
-# reported in place of a measurement for a query that resolved to no
-# coordinates at all: there is nothing to measure, which is not the same claim
-# as a measured absence of coverage
 NOT_APPLICABLE = "NA"
 
 
@@ -159,9 +140,7 @@ def quantify_gene_coverage(
     over query-gene coordinates.
 
     Returns ``(depth, coverage, reads, lengths)``, each a label-keyed dict sorted
-    by label. ``lengths`` gives the number of reference bases each label's
-    depth/breadth was computed over -- the denominator of the other two ratios --
-    so a partially annotated query is distinguishable from a fully quantified one.
+    by label.
 
     ``contig2ranges`` maps each contig to ``[(START, END, LABEL), ...]`` (0-based,
     half-open) as produced by :func:`gff_query_ranges`/:func:`bed_query_ranges`;
@@ -182,8 +161,7 @@ def quantify_gene_coverage(
     see :func:`theiagene.lib.query.unresolved_queries`) seeds every output dict
     with ``NOT_APPLICABLE`` so a requested query missing from the annotation is
     still reported rather than silently dropped -- and is reported as having no
-    measurement, which a seed of 0 would have misstated as a measured absence of
-    coverage. A label that does resolve overwrites its seed with real numbers."""
+    measurement. A label that does resolve overwrites its seed with real numbers."""
     def read_callback(read):
         # count_coverage's own filtering is looser than this command's; passing a
         # callback makes depth and reads_mapped describe the same alignments
@@ -315,12 +293,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--min_depth", type=int, default=1)
     parser.add_argument(
         "--min_base_quality",
-        "--min_quality",
         type=int,
         default=0,
         help="minimum base quality for a base to count toward depth/breadth and "
-        "for the read carrying it to count as mapped; '--min_quality' is a "
-        "deprecated alias",
+        "for the read carrying it to count as mapped
     )
     parser.add_argument(
         "--min_mapping_quality",
