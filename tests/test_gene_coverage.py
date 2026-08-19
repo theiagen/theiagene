@@ -22,7 +22,8 @@ class MockRead:
 
     def __init__(self, query_name, contig, start, length=10, mapping_quality=60,
                  flag=0, is_unmapped=False, is_secondary=False,
-                 is_supplementary=False, is_qcfail=False, is_duplicate=False):
+                 is_supplementary=False, is_qcfail=False, is_duplicate=False,
+                 base_quality=None):
         self.query_name = query_name
         self.reference_name = contig
         self.reference_start = start
@@ -34,6 +35,15 @@ class MockRead:
         self.is_supplementary = is_supplementary
         self.is_qcfail = is_qcfail
         self.is_duplicate = is_duplicate
+        self._length = length
+        # None mirrors an alignment with no quality string ('*')
+        self.query_qualities = (
+            None if base_quality is None else [base_quality] * length
+        )
+
+    def get_aligned_pairs(self, matches_only=False):
+        """Ungapped alignment: query base i sits at reference_start + i."""
+        return [(i, self.reference_start + i) for i in range(self._length)]
 
 
 class MockBam:
@@ -53,12 +63,15 @@ class MockBam:
         self._default = default_depth
         self._reads = list(reads or [])
         self.seen_quality = []
+        self.seen_callbacks = []
 
     def get_reference_length(self, contig):
         return self._lengths[contig]
 
-    def count_coverage(self, contig, start, end, quality_threshold=0):
+    def count_coverage(self, contig, start, end, quality_threshold=0,
+                       read_callback=None):
         self.seen_quality.append(quality_threshold)
+        self.seen_callbacks.append(read_callback)
         a = [
             self._depth_fn(contig, pos) if self._depth_fn else self._default
             for pos in range(start, end)
@@ -85,7 +98,8 @@ class MockMultiChannelBam:
     def get_reference_length(self, contig):
         return self._lengths[contig]
 
-    def count_coverage(self, contig, start, end, quality_threshold=0):
+    def count_coverage(self, contig, start, end, quality_threshold=0,
+                       read_callback=None):
         width = end - start
         return tuple([value] * width for value in self._per_channel)
 
@@ -139,27 +153,32 @@ def test_make_tsv_renders_header_and_rows():
         {"geneA": 12, "geneB": 3},
         {"geneA": True, "geneB": False},
         ambiguous_contig=False,
+        lengths_dict={"geneA": 900, "geneB": 300},
     )
     lines = tsv.splitlines()
     assert lines[0] == (
         "#query\taverage_depth\tpercent_coverage\treads_mapped\treads_mapped_pass"
+        "\tquantified_length"
     )
-    assert lines[1] == "geneA\t5.0\t100.0\t12\tTrue"
-    assert lines[2] == "geneB\t2.0\t50.0\t3\tFalse"
+    assert lines[1] == "geneA\t5.0\t100.0\t12\tTrue\t900"
+    assert lines[2] == "geneB\t2.0\t50.0\t3\tFalse\t300"
 
 
 def test_make_tsv_warns_in_header_when_contig_is_ambiguous():
     tsv = gene_coverage.make_tsv(
         {"geneA": 1.0}, {"geneA": 100.0}, {"geneA": 1}, {"geneA": True},
-        ambiguous_contig=True,
+        ambiguous_contig=True, lengths_dict={"geneA": 900},
     )
     assert tsv.splitlines()[0].startswith("#query (WARNING")
 
 
 def test_make_tsv_with_no_rows_is_header_only():
-    tsv = gene_coverage.make_tsv({}, {}, {}, {}, ambiguous_contig=False)
+    tsv = gene_coverage.make_tsv(
+        {}, {}, {}, {}, ambiguous_contig=False, lengths_dict={}
+    )
     assert tsv == (
-        "#query\taverage_depth\tpercent_coverage\treads_mapped\treads_mapped_pass\n"
+        "#query\taverage_depth\tpercent_coverage\treads_mapped\treads_mapped_pass"
+        "\tquantified_length\n"
     )
 
 
@@ -188,6 +207,15 @@ def test_flag_reads_mapped_keeps_every_query():
     assert set(flags) == {"geneA", "geneB"}
 
 
+def test_flag_reads_mapped_passes_na_through_uncalled():
+    # an unresolved query has no read total to threshold, so it is neither
+    # passed nor failed -- distinguishing it from a measured 0
+    flags = gene_coverage.flag_reads_mapped(
+        {"measured": 0, "unresolved": "NA"}, min_reads_mapped=1
+    )
+    assert flags == {"measured": False, "unresolved": "NA"}
+
+
 # --------------------------------------------------------------------------- #
 # union_intervals
 # --------------------------------------------------------------------------- #
@@ -214,7 +242,7 @@ def test_quantify_known_depth_and_full_breadth():
     bam = MockBam({"contig1": 100}, default_depth=5)
     ranges = {"contig1": [(10, 20, "geneA")]}
 
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
 
     assert depth["geneA"] == 5.0
     assert coverage["geneA"] == 100.0
@@ -225,7 +253,7 @@ def test_quantify_pools_segments_sharing_a_label():
     # two CDS segments of one query gene share a label and are pooled
     ranges = {"contig1": [(0, 6, "geneA"), (10, 16, "geneA")]}
 
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
 
     # 12 evaluated bases, all at depth 4
     assert depth["geneA"] == 4.0
@@ -242,7 +270,7 @@ def test_quantify_unions_overlapping_ranges_sharing_a_label():
     bam = MockBam({"c1": 200}, depth_fn=depth_fn)
     ranges = {"c1": [(0, 50, "GENE"), (0, 100, "GENE")]}
 
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
 
     # union is [0, 100): 100 bases, 50 covered -> 50% breadth, 0.5x depth.
     # a 150-base concatenation would wrongly report 66.67% / 0.6667x.
@@ -258,7 +286,7 @@ def test_quantify_partial_breadth_from_min_depth_threshold():
     bam = MockBam({"contig1": 100}, depth_fn=depth_fn)
     ranges = {"contig1": [(10, 20, "geneA")]}
 
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
 
     assert depth["geneA"] == 5.0     # mean of five 10s and five 0s
     assert coverage["geneA"] == 50.0  # half the bases meet min_depth
@@ -268,30 +296,45 @@ def test_quantify_min_depth_boundary_is_inclusive():
     bam = MockBam({"contig1": 100}, default_depth=3)
     ranges = {"contig1": [(10, 20, "geneA")]}
     # depth exactly at the threshold counts as covered
-    _, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=3)
+    _, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=3)
     assert coverage["geneA"] == 100.0
     # one above the observed depth counts as uncovered
-    _, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=4)
+    _, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=4)
     assert coverage["geneA"] == 0.0
 
 
-def test_quantify_passes_min_quality_through_to_count_coverage():
+def test_quantify_passes_min_base_quality_through_to_count_coverage():
     bam = MockBam({"contig1": 100}, default_depth=5)
     ranges = {"contig1": [(10, 20, "geneA")]}
-    gene_coverage.quantify_gene_coverage(bam, ranges, min_quality=30)
+    gene_coverage.quantify_gene_coverage(bam, ranges, min_base_quality=30)
     assert bam.seen_quality == [30]
+
+
+def test_quantify_hands_count_coverage_the_shared_read_filter():
+    # depth must be measured over the same alignments the reads total counts,
+    # which pysam's default read_callback ('all') would not do
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    ranges = {"contig1": [(10, 20, "geneA")]}
+    gene_coverage.quantify_gene_coverage(bam, ranges, min_mapping_quality=30)
+    callback = bam.seen_callbacks[0]
+    assert callback is not None
+    assert callback(MockRead("kept", "contig1", 12, mapping_quality=30))
+    assert not callback(MockRead("low_mapq", "contig1", 12, mapping_quality=29))
+    assert not callback(
+        MockRead("supplementary", "contig1", 12, is_supplementary=True)
+    )
 
 
 def test_quantify_sorts_output_by_query():
     bam = MockBam({"contig1": 100}, default_depth=5)
     ranges = {"contig1": [(10, 20, "geneB"), (30, 40, "geneA")]}
-    depth, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, _, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     assert list(depth) == ["geneA", "geneB"]
 
 
 def test_quantify_returns_empty_for_no_ranges():
     bam = MockBam({"contig1": 100}, default_depth=5)
-    depth, coverage, reads = gene_coverage.quantify_gene_coverage(bam, {}, min_depth=1)
+    depth, coverage, reads, _ = gene_coverage.quantify_gene_coverage(bam, {}, min_depth=1)
     assert depth == {}
     assert coverage == {}
     assert reads == {}
@@ -323,35 +366,57 @@ def test_quantify_seeds_expected_labels_absent_from_ranges():
     bam = MockBam({"contig1": 100}, default_depth=5,
                   reads=[MockRead("r1", "contig1", 10)])
     ranges = {"contig1": [(10, 20, "geneA")]}
-    depth, coverage, reads = gene_coverage.quantify_gene_coverage(
+    depth, coverage, reads, lengths = gene_coverage.quantify_gene_coverage(
         bam, ranges, min_depth=1, expected_labels=["geneA", "geneMissing"]
     )
-    # geneMissing resolved no coordinates but is still reported as absent (0)
-    assert depth == {"geneA": 5.0, "geneMissing": 0}
-    assert coverage == {"geneA": 100.0, "geneMissing": 0}
-    assert reads == {"geneA": 1, "geneMissing": 0}
+    # geneMissing resolved no coordinates, so it is reported as unmeasured (NA)
+    # rather than as a measured zero
+    assert depth == {"geneA": 5.0, "geneMissing": "NA"}
+    assert coverage == {"geneA": 100.0, "geneMissing": "NA"}
+    assert reads == {"geneA": 1, "geneMissing": "NA"}
+    assert lengths == {"geneA": 10, "geneMissing": "NA"}
 
 
-def test_quantify_measured_label_overrides_the_zero_seed():
+def test_quantify_lengths_sum_a_labels_segments_across_contigs():
+    # a label's segments pool into one row, so its length is their total
+    bam = MockBam({"contig1": 100, "contig2": 100}, default_depth=5)
+    ranges = {
+        "contig1": [(10, 20, "geneA"), (30, 45, "geneA")],
+        "contig2": [(0, 5, "geneA")],
+    }
+    *_, lengths = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    assert lengths == {"geneA": 30}
+
+
+def test_quantify_lengths_count_a_shared_base_once():
+    # overlapping ranges (e.g. isoform CDS) union before counting, so the
+    # length matches the denominator depth/breadth were taken over
+    bam = MockBam({"contig1": 100}, default_depth=5)
+    ranges = {"contig1": [(10, 30, "geneA"), (20, 40, "geneA")]}
+    *_, lengths = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    assert lengths == {"geneA": 30}
+
+
+def test_quantify_measured_label_overrides_the_na_seed():
     bam = MockBam({"contig1": 100}, default_depth=8)
     ranges = {"contig1": [(10, 20, "geneA")]}
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(
         bam, ranges, min_depth=1, expected_labels=["geneA"]
     )
-    # the seeded 0 is replaced by the measured value, not summed with it
+    # the NA seed is replaced by the measured value
     assert depth["geneA"] == 8.0
     assert coverage["geneA"] == 100.0
 
 
-def test_quantify_all_expected_labels_zero_when_no_ranges():
+def test_quantify_all_expected_labels_na_when_no_ranges():
     bam = MockBam({"contig1": 100}, default_depth=5)
-    depth, coverage, reads = gene_coverage.quantify_gene_coverage(
+    depth, coverage, reads, _ = gene_coverage.quantify_gene_coverage(
         bam, {}, min_depth=1, expected_labels=["geneB", "geneA"]
     )
-    # nothing measured; every requested query is reported as absent and sorted
-    assert depth == {"geneA": 0, "geneB": 0}
-    assert coverage == {"geneA": 0, "geneB": 0}
-    assert reads == {"geneA": 0, "geneB": 0}
+    # nothing measured; every requested query is reported as NA and sorted
+    assert depth == {"geneA": "NA", "geneB": "NA"}
+    assert coverage == {"geneA": "NA", "geneB": "NA"}
+    assert reads == {"geneA": "NA", "geneB": "NA"}
     assert list(depth) == ["geneA", "geneB"]
 
 
@@ -368,7 +433,7 @@ def test_quantify_counts_reads_overlapping_a_range():
         ],
     )
     ranges = {"contig1": [(10, 20, "geneA")]}
-    _, _, reads = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    _, _, reads, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     assert reads == {"geneA": 1}
 
 
@@ -377,7 +442,7 @@ def test_quantify_counts_a_read_spanning_pooled_ranges_once():
     # ranges must not count it twice
     bam = MockBam({"contig1": 100}, reads=[MockRead("spanner", "contig1", 5, length=40)])
     ranges = {"contig1": [(10, 20, "geneA"), (30, 40, "geneA")]}
-    _, _, reads = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    _, _, reads, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     assert reads == {"geneA": 1}
 
 
@@ -391,7 +456,7 @@ def test_quantify_counts_paired_mates_separately():
         ],
     )
     ranges = {"contig1": [(10, 20, "geneA")]}
-    _, _, reads = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    _, _, reads, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     assert reads == {"geneA": 2}
 
 
@@ -405,10 +470,10 @@ def test_quantify_min_mapping_quality_filters_reads():
     )
     ranges = {"contig1": [(10, 20, "geneA")]}
 
-    _, _, unfiltered = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    _, _, unfiltered, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     assert unfiltered == {"geneA": 2}
 
-    _, _, filtered = gene_coverage.quantify_gene_coverage(
+    _, _, filtered, _ = gene_coverage.quantify_gene_coverage(
         bam, ranges, min_depth=1, min_mapping_quality=20
     )
     assert filtered == {"geneA": 1}
@@ -419,12 +484,12 @@ def test_quantify_min_mapping_quality_boundary_is_inclusive():
                   reads=[MockRead("edge", "contig1", 12, mapping_quality=30)])
     ranges = {"contig1": [(10, 20, "geneA")]}
     # mapping quality exactly at the threshold still counts
-    _, _, at = gene_coverage.quantify_gene_coverage(
+    _, _, at, _ = gene_coverage.quantify_gene_coverage(
         bam, ranges, min_depth=1, min_mapping_quality=30
     )
     assert at == {"geneA": 1}
     # one above the observed mapping quality does not
-    _, _, above = gene_coverage.quantify_gene_coverage(
+    _, _, above, _ = gene_coverage.quantify_gene_coverage(
         bam, ranges, min_depth=1, min_mapping_quality=31
     )
     assert above == {"geneA": 0}
@@ -434,7 +499,7 @@ def test_quantify_min_mapping_quality_boundary_is_inclusive():
     "flag_kwarg",
     ["is_unmapped", "is_secondary", "is_supplementary", "is_qcfail", "is_duplicate"],
 )
-def test_quantify_excludes_reads_count_coverage_ignores(flag_kwarg):
+def test_quantify_excludes_filtered_alignments_from_reads(flag_kwarg):
     # the reads total must describe the same alignments that feed depth/breadth
     bam = MockBam(
         {"contig1": 100},
@@ -444,7 +509,68 @@ def test_quantify_excludes_reads_count_coverage_ignores(flag_kwarg):
         ],
     )
     ranges = {"contig1": [(10, 20, "geneA")]}
-    _, _, reads = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    _, _, reads, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    assert reads == {"geneA": 1}
+
+
+def test_quantify_min_base_quality_filters_reads():
+    # a read whose bases are all below the threshold contributes nothing to the
+    # depth measured here, so it must not be counted as mapped either
+    bam = MockBam(
+        {"contig1": 100},
+        reads=[
+            MockRead("good_bases", "contig1", 12, base_quality=30),
+            MockRead("poor_bases", "contig1", 12, base_quality=2),
+        ],
+    )
+    ranges = {"contig1": [(10, 20, "geneA")]}
+
+    _, _, unfiltered, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    assert unfiltered == {"geneA": 2}
+
+    _, _, filtered, _ = gene_coverage.quantify_gene_coverage(
+        bam, ranges, min_depth=1, min_base_quality=20
+    )
+    assert filtered == {"geneA": 1}
+
+
+def test_quantify_min_base_quality_boundary_is_inclusive():
+    bam = MockBam({"contig1": 100},
+                  reads=[MockRead("edge", "contig1", 12, base_quality=20)])
+    ranges = {"contig1": [(10, 20, "geneA")]}
+    _, _, at, _ = gene_coverage.quantify_gene_coverage(
+        bam, ranges, min_depth=1, min_base_quality=20
+    )
+    assert at == {"geneA": 1}
+    _, _, above, _ = gene_coverage.quantify_gene_coverage(
+        bam, ranges, min_depth=1, min_base_quality=21
+    )
+    assert above == {"geneA": 0}
+
+
+def test_quantify_min_base_quality_only_needs_one_qualifying_base_in_range():
+    # the read's qualifying bases sit outside [10, 20); only the in-range bases
+    # decide whether it counts toward this range
+    read = MockRead("mixed", "contig1", 5, length=20, base_quality=2)
+    read.query_qualities = [40] * 5 + [2] * 15   # ref 5-10 high, 10-25 low
+    bam = MockBam({"contig1": 100}, reads=[read])
+    _, _, outside, _ = gene_coverage.quantify_gene_coverage(
+        bam, {"contig1": [(10, 20, "geneA")]}, min_depth=1, min_base_quality=20
+    )
+    assert outside == {"geneA": 0}
+    _, _, inside, _ = gene_coverage.quantify_gene_coverage(
+        bam, {"contig1": [(5, 10, "geneA")]}, min_depth=1, min_base_quality=20
+    )
+    assert inside == {"geneA": 1}
+
+
+def test_quantify_counts_reads_without_a_quality_string():
+    # an alignment with no quality string ('*') is quality 255 to htslib
+    bam = MockBam({"contig1": 100}, reads=[MockRead("no_quals", "contig1", 12)])
+    ranges = {"contig1": [(10, 20, "geneA")]}
+    _, _, reads, _ = gene_coverage.quantify_gene_coverage(
+        bam, ranges, min_depth=1, min_base_quality=30
+    )
     assert reads == {"geneA": 1}
 
 
@@ -457,7 +583,7 @@ def test_quantify_pools_reads_for_one_label_across_contigs():
         ],
     )
     ranges = {"contig1": [(0, 10, "geneA")], "contig2": [(0, 10, "geneA")]}
-    _, _, reads = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    _, _, reads, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     assert reads == {"geneA": 2}
 
 
@@ -467,7 +593,7 @@ def test_quantify_across_multiple_contigs_keeps_labels_separate():
         "contig1": [(10, 20, "geneA")],
         "contig2": [(30, 40, "geneB")],
     }
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     assert depth == {"geneA": 6.0, "geneB": 6.0}
     assert coverage == {"geneA": 100.0, "geneB": 100.0}
 
@@ -482,7 +608,7 @@ def test_quantify_pools_one_label_across_contigs():
         "contig1": [(0, 10, "geneA")],
         "contig2": [(0, 10, "geneA")],
     }
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     # both contigs' bases pool onto one geneA row: mean 5, half covered
     assert depth["geneA"] == 5.0
     assert coverage["geneA"] == 50.0
@@ -491,7 +617,7 @@ def test_quantify_pools_one_label_across_contigs():
 def test_quantify_sums_all_four_coverage_channels():
     bam = MockMultiChannelBam({"contig1": 100}, per_channel=(1, 2, 3, 4))
     ranges = {"contig1": [(10, 20, "geneA")]}
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     # each base's depth is 1+2+3+4 = 10 summed across the A/C/G/T channels
     assert depth["geneA"] == 10.0
     assert coverage["geneA"] == 100.0
@@ -530,7 +656,7 @@ def test_gff_query_ranges_matches_product_and_quantifies(tmp_path):
     assert ranges == {"contig1": [(10, 20, "geneA")]}
 
     bam = MockBam({"contig1": 100}, default_depth=7)
-    depth, coverage, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
+    depth, coverage, _, _ = gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
     # geneB was filtered out; only the matched query is reported
     assert depth == {"geneA": 7.0}
     assert coverage == {"geneA": 100.0}
@@ -552,10 +678,10 @@ def _write_paralog_gff(tmp_path):
     return str(gff)
 
 
-def test_gff_query_ranges_labels_paralogs_by_resolved_gene_not_query_term(tmp_path):
-    # regression: a substring query matching two paralogs must yield two rows
-    # labelled by each unit's resolved gene name -- not one row labelled by the
-    # shared query term (which would collapse distinct genes together)
+def test_gff_query_ranges_labels_paralogs_by_query_term_and_resolved_gene(tmp_path):
+    # regression: a substring query matching two paralogs must yield two rows --
+    # not one row labelled by the shared query term (which would collapse
+    # distinct genes into a single pooled measurement)
     from theiagene.lib.parsers import assimilate_gff
     from theiagene.lib.query import gff_query_ranges
 
@@ -563,8 +689,52 @@ def test_gff_query_ranges_labels_paralogs_by_resolved_gene_not_query_term(tmp_pa
     ranges = gff_query_ranges(
         features, ["ERG1"], "CDS", ["product"], exact_match=False
     )
-    # both mRNAs match the "ERG1" substring, but resolve to distinct labels
+    # both mRNAs match the "ERG1" substring, so the resolved gene name is folded
+    # into the key to keep them apart
+    assert ranges == {"c1": [(0, 300, "ERG1"), (999, 1300, "ERG1.ERG11")]}
+
+
+def test_gff_query_ranges_labels_paralogs_on_separate_contigs(tmp_path):
+    # the query-term-to-gene map is global: paralogs on different contigs must
+    # still be told apart, even though each contig's ranges are held separately
+    from theiagene.lib.parsers import assimilate_gff
+    from theiagene.lib.query import gff_query_ranges
+
+    gff = tmp_path / "split_paralogs.gff"
+    gff.write_text(
+        "c1\t.\tgene\t1\t300\t.\t+\t.\tID=g1;gene=ERG1\n"
+        "c1\t.\tCDS\t1\t300\t.\t+\t0\tID=c1a;Parent=g1;product=ERG1\n"
+        "c2\t.\tgene\t1\t300\t.\t+\t.\tID=g2;gene=ERG11\n"
+        "c2\t.\tCDS\t1\t300\t.\t+\t0\tID=c2a;Parent=g2;product=ERG11\n"
+    )
+    ranges = gff_query_ranges(
+        assimilate_gff(str(gff)), ["ERG1"], "CDS", ["product"], exact_match=False
+    )
+    assert ranges == {
+        "c1": [(0, 300, "ERG1")],
+        "c2": [(0, 300, "ERG1.ERG11")],
+    }
+
+
+def test_gff_query_ranges_labels_every_unit_without_a_query_list(tmp_path):
+    # an empty query list keeps every unit, named by its own resolved gene
+    from theiagene.lib.parsers import assimilate_gff
+    from theiagene.lib.query import gff_query_ranges
+
+    features = assimilate_gff(_write_paralog_gff(tmp_path))
+    ranges = gff_query_ranges(features, [], "CDS", ["product"], exact_match=False)
     assert ranges == {"c1": [(0, 300, "ERG1"), (999, 1300, "ERG11")]}
+
+
+def test_unresolved_queries_drops_terms_resolved_under_a_paralog_suffix():
+    from theiagene.lib.query import unresolved_queries
+
+    contig2ranges = {
+        "c1": [(0, 300, "ERG1"), (999, 1300, "ERG1.ERG11")],
+        "c2": [(0, 300, "FKS1")],
+    }
+    # ERG1 and FKS1 both resolved; only ERG3 needs seeding as absent
+    assert unresolved_queries(["ERG1", "FKS1", "ERG3"], contig2ranges) == ["ERG3"]
 
 
 def test_gff_query_ranges_falls_back_to_gene_without_rna(tmp_path):
@@ -624,7 +794,7 @@ def test_quantify_with_real_bam_counts_a_single_read(make_bam):
     imported = import_bam(bam_path)
     ranges = {"contig1": [(10, 20, "geneA")]}
 
-    depth, coverage, reads = gene_coverage.quantify_gene_coverage(
+    depth, coverage, reads, _ = gene_coverage.quantify_gene_coverage(
         imported, ranges, min_depth=1
     )
 
@@ -641,12 +811,12 @@ def test_quantify_with_real_bam_honors_min_mapping_quality(make_bam):
     bam_path = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
     ranges = {"contig1": [(10, 20, "geneA")]}
 
-    _, _, kept = gene_coverage.quantify_gene_coverage(
+    _, _, kept, _ = gene_coverage.quantify_gene_coverage(
         import_bam(bam_path), ranges, min_depth=1, min_mapping_quality=60
     )
     assert kept["geneA"] == 1
 
-    _, _, dropped = gene_coverage.quantify_gene_coverage(
+    _, _, dropped, _ = gene_coverage.quantify_gene_coverage(
         import_bam(bam_path), ranges, min_depth=1, min_mapping_quality=61
     )
     assert dropped["geneA"] == 0
@@ -685,6 +855,12 @@ def _read_reads_pass():
         return json.load(fh)
 
 
+def _read_lengths():
+    """Load the per-query quantified lengths run_cli writes."""
+    with open("LENGTHS_DICT.json") as fh:
+        return json.load(fh)
+
+
 def _write_bed(tmp_path, rows, name="regions.bed"):
     bed = tmp_path / name
     bed.write_text("".join(f"{c}\t{s}\t{e}\t{n}\n" for c, s, e, n in rows))
@@ -718,10 +894,13 @@ def test_run_cli_gff_with_query_genes_writes_all_outputs(tmp_path, make_bam, mon
     assert coverage == {"geneA": 100.0}
     assert reads == {"geneA": 1}
     assert _read_reads_pass() == {"geneA": True}
+    # the CDS is 1-based [11, 20], i.e. 10 quantified bases
+    assert _read_lengths() == {"geneA": 10}
     assert tsv.splitlines()[0] == (
         "#query\taverage_depth\tpercent_coverage\treads_mapped\treads_mapped_pass"
+        "\tquantified_length"
     )
-    assert "geneA\t1.0\t100.0\t1\tTrue" in tsv
+    assert "geneA\t1.0\t100.0\t1\tTrue\t10" in tsv
 
 
 def test_run_cli_bed_as_coordinate_source(tmp_path, make_bam, monkeypatch):
@@ -783,7 +962,7 @@ def test_run_cli_ambiguous_contig_rejects_multi_contig_bam(tmp_path, monkeypatch
         gene_coverage.run_cli(args)
 
 
-def test_run_cli_reports_unresolved_query_as_zero_and_warns(
+def test_run_cli_reports_unresolved_query_as_na_and_warns(
     tmp_path, make_bam, monkeypatch, caplog
 ):
     gff = _write_gff(tmp_path)
@@ -796,15 +975,16 @@ def test_run_cli_reports_unresolved_query_as_zero_and_warns(
         assert gene_coverage.run_cli(args) == 0
 
     depth, coverage, reads, _ = _read_outputs()
-    # still reported (seeded to 0), not silently dropped
-    assert depth == {"ghost_gene": 0}
-    assert coverage == {"ghost_gene": 0}
-    assert reads == {"ghost_gene": 0}
-    assert _read_reads_pass() == {"ghost_gene": False}
+    # still reported, not silently dropped -- and as NA, since nothing was
+    # measured for it, rather than as a measured zero
+    assert depth == {"ghost_gene": "NA"}
+    assert coverage == {"ghost_gene": "NA"}
+    assert reads == {"ghost_gene": "NA"}
+    assert _read_reads_pass() == {"ghost_gene": "NA"}
     assert any("No query-gene coordinates" in r.message for r in caplog.records)
 
 
-def test_run_cli_min_mapping_quality_reaches_the_reads_count(
+def test_run_cli_min_mapping_quality_gates_depth_and_reads(
     tmp_path, make_bam, monkeypatch
 ):
     gff = _write_gff(tmp_path)
@@ -817,9 +997,11 @@ def test_run_cli_min_mapping_quality_reaches_the_reads_count(
     monkeypatch.chdir(tmp_path)
     assert gene_coverage.run_cli(args) == 0
 
-    depth, _, reads, _ = _read_outputs()
-    # the read is still counted toward depth (min_quality gates bases, not reads)
-    assert depth == {"geneA": 1.0}
+    depth, coverage, reads, _ = _read_outputs()
+    # a read too poorly mapped to count is excluded from every measurement, not
+    # just the reads total -- count_coverage runs under the same filter
+    assert depth == {"geneA": 0.0}
+    assert coverage == {"geneA": 0.0}
     assert reads == {"geneA": 0}
 
 

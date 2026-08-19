@@ -24,8 +24,17 @@ def test_gene_coverage_argument_defaults():
     args = parser.parse_args(["gene_coverage", "--bam", "x.bam", "--reference_gff", "r.gff"])
     assert args.feature_type == "CDS"
     assert args.min_depth == 1
-    assert args.min_quality == 0
+    assert args.min_base_quality == 0
     assert args.ambiguous_contig is False
+
+
+def test_gene_coverage_accepts_deprecated_min_quality_alias():
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["gene_coverage", "--bam", "x.bam", "--reference_gff", "r.gff",
+         "--min_quality", "20"]
+    )
+    assert args.min_base_quality == 20
 
 
 def test_version_flag_exits_cleanly(capsys):

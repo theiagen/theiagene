@@ -257,6 +257,35 @@ def test_report_variants_falls_back_to_product_label(annotations):
     ]
 
 
+def test_report_variants_drops_row_whose_hgvs_columns_are_absent(tmp_path):
+    # VEP run without --hgvs emits no HGVSc/HGVSp columns at all; such a row
+    # describes no variant, so it must be dropped rather than reported as a
+    # bare consequence
+    gff = tmp_path / "reference.gff"
+    gff.write_text(_GFF)
+    tsv = tmp_path / "no_hgvs.tsv"
+    tsv.write_text(
+        "#Uploaded_variation\tLocation\tAllele\tConsequence\tFeature\n"
+        "chr1_100_T/C\tchr1:100\tC\tmissense_variant\trna-x\n"
+    )
+    features = assimilate_gff(str(gff))
+    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == []
+
+
+def test_report_variants_drops_row_truncated_before_its_hgvs_columns(tmp_path):
+    # a short data row leaves the trailing columns missing from the zipped dict,
+    # which must read as undefined rather than as a value
+    gff = tmp_path / "reference.gff"
+    gff.write_text(_GFF)
+    tsv = tmp_path / "ragged.tsv"
+    tsv.write_text(
+        "#Uploaded_variation\tAllele\tConsequence\tFeature\tHGVSc\tHGVSp\n"
+        "chr1_100_T/C\tC\tmissense_variant\trna-x\n"
+    )
+    features = assimilate_gff(str(gff))
+    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == []
+
+
 def test_report_variants_exact_match_rejects_substring_query(annotations):
     gff, tsv = annotations
     features = assimilate_gff(gff)

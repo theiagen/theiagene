@@ -30,13 +30,26 @@ theiagene report_variants --help
 
 ### gene_coverage
 
-Report average depth, percent coverage, and mapped reads per query gene.
-Coordinates come from a reference GFF or a BED file; outputs are written to the
-working directory as `DEPTH_DICT.json`, `COVERAGE_DICT.json`, `READS_DICT.json`,
-`READS_PASS_DICT.json` and `COVERAGE_STATS.tsv`. A gene whose mapped reads fall
-below `--min_reads_mapped` (default 1) is flagged as failing in
-`READS_PASS_DICT.json`, but keeps its measured depth, breadth, and read count —
-the flag is a call layered onto the measurements, not a filter of them.
+Report average depth, percent coverage, mapped reads, and quantified length per
+query gene. Coordinates come from a reference GFF or a BED file; outputs are
+written to the working directory as `DEPTH_DICT.json`, `COVERAGE_DICT.json`,
+`READS_DICT.json`, `READS_PASS_DICT.json`, `LENGTHS_DICT.json` and
+`COVERAGE_STATS.tsv`. A gene whose mapped reads fall below `--min_reads_mapped`
+(default 1) is flagged as failing in `READS_PASS_DICT.json`, but keeps its
+measured depth, breadth, and read count — the flag is a call layered onto the
+measurements, not a filter of them.
+
+`LENGTHS_DICT.json` gives the number of reference bases each gene's depth and breadth
+were computed over — the denominator of both ratios. Its bases are counted after
+the gene's ranges are merged, so a base shared by two overlapping segments (e.g.
+isoform CDS) contributes once, and a gene split across several segments or
+contigs reports their combined length. It is what separates a gene whose 100%
+coverage spans its full CDS from one whose annotation only resolved a fragment.
+
+A query gene that resolves to no coordinates in the annotation is reported as
+`NA` in all five outputs, not 0: nothing was measured for it, which is a
+different claim from having measured no coverage. Consumers reading these JSON
+files as numbers must handle the `NA` string.
 
 All three measurements are taken over one read set, so `reads_mapped` describes
 the alignments the depth and breadth were computed from:
