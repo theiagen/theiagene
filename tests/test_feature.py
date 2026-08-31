@@ -214,3 +214,89 @@ def test_featurecol_buckets_features_by_canonical_class():
     assert [f.fid for f in fl["cds"]] == ["b"]
     # a class with no members is empty
     assert fl["exon"] == []
+
+
+# --------------------------------------------------------------------------- #
+# contig and coordinate access
+# --------------------------------------------------------------------------- #
+
+def _placed(fid, type, start, end, seqid="chr1", pid=None):
+    attributes = {"ID": fid}
+    if pid:
+        attributes["Parent"] = pid
+    return Feature(fid=fid, pid=pid, seqid=seqid, type=type, start=start, end=end,
+                   attributes=attributes)
+
+
+def test_featurecol_by_seqid_returns_only_that_contig():
+    a = _placed("gene-A", "gene", 0, 100, seqid="chr1")
+    b = _placed("gene-B", "gene", 0, 100, seqid="chr2")
+    col = FeatureCol([a, b])
+
+    on_chr1 = col.by_seqid("chr1")
+    assert isinstance(on_chr1, FeatureCol)
+    assert [f.fid for f in on_chr1] == ["gene-A"]
+    # an unknown contig is empty rather than an error, and does not seed a key
+    assert len(col.by_seqid("chrZ")) == 0
+    assert set(col._contigs) == {"chr1", "chr2"}
+
+
+def test_featurecol_by_seqid_preserves_hierarchy_links():
+    gene = _placed("gene-A", "gene", 0, 100)
+    rna = _placed("rna-A", "mRNA", 0, 100, pid="gene-A")
+    cds = _placed("cds-A", "CDS", 10, 90, pid="rna-A")
+    subset = FeatureCol([gene, rna, cds]).by_seqid("chr1")
+
+    # grouping is skipped, so the links wired on the parent collection survive
+    assert subset.by_id("rna-A").parent is gene
+    assert subset.by_id("rna-A").descendants == [cds]
+    # and the class buckets are rebuilt for the subset
+    assert [f.fid for f in subset["CDS"]] == ["cds-A"]
+
+
+def test_featurecol_index_selects_features_spanning_a_position():
+    gene = _placed("gene-A", "gene", 0, 100)
+    cds = _placed("cds-A", "CDS", 10, 90, pid="gene-A")
+    downstream = _placed("gene-B", "gene", 200, 300)
+    col = FeatureCol([gene, cds, downstream])
+
+    # every class containing the position is returned; the caller narrows by key
+    hit = col.index("chr1", 50)
+    assert {f.fid for f in hit} == {"gene-A", "cds-A"}
+    assert [f.fid for f in hit["CDS"]] == ["cds-A"]
+    # a position inside the gene but outside its CDS keeps only the gene
+    assert {f.fid for f in col.index("chr1", 5)} == {"gene-A"}
+    # nothing between the features, and nothing on an unknown contig
+    assert len(col.index("chr1", 150)) == 0
+    assert len(col.index("chrZ", 50)) == 0
+
+
+def test_featurecol_index_is_zero_based_half_open():
+    feature = _placed("cds-A", "CDS", 10, 20)
+    col = FeatureCol([feature])
+    # start is inclusive, end exclusive -- matching Feature's own coordinates
+    assert len(col.index("chr1", 10)) == 1
+    assert len(col.index("chr1", 19)) == 1
+    assert len(col.index("chr1", 20)) == 0
+    assert len(col.index("chr1", 9)) == 0
+    # a range abutting the feature does not overlap it; one crossing its start does
+    assert len(col.index("chr1", 0, 10)) == 0
+    assert len(col.index("chr1", 0, 11)) == 1
+
+
+def test_featurecol_index_rejects_an_empty_range():
+    col = FeatureCol([_placed("cds-A", "CDS", 10, 20)])
+    with pytest.raises(ValueError, match="must be > start"):
+        col.index("chr1", 20, 10)
+    with pytest.raises(ValueError, match="must be > start"):
+        col.index("chr1", 10, 10)
+
+
+def test_featurecol_contig_index_survives_sort():
+    # sort() replaces self.features, so the contig index must be rebuilt with the
+    # class buckets rather than left pointing at the pre-sort ordering
+    late = _placed("gene-B", "gene", 200, 300)
+    early = _placed("gene-A", "gene", 0, 100)
+    col = FeatureCol([late, early]).sort()
+    assert [f.fid for f in col.by_seqid("chr1")] == ["gene-A", "gene-B"]
+    assert {f.fid for f in col.index("chr1", 250)} == {"gene-B"}
