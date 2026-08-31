@@ -58,7 +58,7 @@ _UNDEFINED = {"-", "", ".", None}
 
 # the attribute keys VEP's `Feature` column can be drawn from; which one its GFF
 # parser lands on varies by annotation source, so each is tried in turn
-_RNA_ID_KEYS = ("ID", "Name", "transcript_id")
+_UNIT_ID_KEYS = ("ID", "Name", "transcript_id")
 
 
 def parse_vep_tsv(vep_tsv: str):
@@ -323,18 +323,24 @@ def _select_unit(units: list, vep_feature: str):
     and there is nothing to disambiguate. Only where several overlap does the
     row's ``Feature`` break the tie, compared against the unit's own identifiers
     (never its parent's or its CDS product's, which sibling transcripts of one
-    gene share and which would therefore match both)."""
+    gene share and which would therefore match both).
+
+    None is returned when nothing overlapped, when an ambiguous overlap carries
+    no ``Feature`` to arbitrate it, and when none of the units answer to the one
+    it carries -- all of which leave the caller to skip the row rather than
+    attribute it to whichever unit happened to sort first."""
     if len(units) < 2:
-        # default to the first Feature set
         return units[0] if units else None
     if vep_feature in _UNDEFINED:
-        # nothing can be identified
         return None
     for unit in units:
-        identifiers = [unit.fid] + [unit.attributes.get(key) for key in _RNA_ID_KEYS]
+        # `fid` alongside the attributes: group_features may have renamed a
+        # colliding ID, leaving the one VEP saw only in `attributes`
+        identifiers = [unit.fid] + [unit.attributes.get(key) for key in _UNIT_ID_KEYS]
         if any(identifier == vep_feature for identifier in identifiers):
             return unit
     return None
+
 
 def report_variants(
     vep_tsv: str,
@@ -349,12 +355,15 @@ def report_variants(
     """Turn a VEP TSV into query-labelled report lines.
 
     A row is dropped when any of its consequence terms is suppressed, when it
-    carries neither an HGVSc nor an HGVSp string, or when its ``Feature`` cannot
-    be resolved to a CDS product in ``features``. Each kept line leads with the
-    ``query_list`` term that matched the row's feature, falling back to the
-    product-derived label when no query matched. When ``depth_index`` is given
-    (see :func:`build_depth_index`), each kept line carries the variant's
-    per-allele read depths."""
+    carries neither an HGVSc nor an HGVSp string, when its ``Location`` does not
+    parse, or when that location cannot be resolved to a CDS product in
+    ``features`` -- either because no annotation unit overlaps it, because
+    several do and none answers to the row's ``Feature`` (see
+    :func:`_select_unit`), or because the resolved unit carries no qualifier.
+    Each kept line leads with the ``query_list`` term that matched the row's
+    unit, falling back to the product-derived label when no query matched. When
+    ``depth_index`` is given (see :func:`build_depth_index`), each kept line
+    carries the variant's per-allele read depths."""
     lines = []
     for row in parse_vep_tsv(vep_tsv):
         if any(consequence in suppress for consequence in _consequences(row)):
@@ -362,7 +371,8 @@ def report_variants(
         # nothing to translate without at least one HGVS string
         if row.get("HGVSc") in _UNDEFINED and row.get("HGVSp") in _UNDEFINED:
             continue
-        # Identify the feature by coordinate because VEP using variable GFF attributes parsing
+        # the variant is placed by coordinate rather than by the row's `Feature`,
+        # whose spelling depends on which attribute VEP's GFF parser read
         location = _extract_location(row)
         if location is None:
             logger.warning(f"cannot resolve location {row.get('Location')}; "
@@ -370,7 +380,11 @@ def report_variants(
             continue
         seqid, start, end = location
         hits = features.index(seqid, start, end)
-        # VEP preferentially operates on transcripts, provide some defense if otherwise
+        # `index` returns every overlapping record regardless of class, so units
+        # are taken from one level: the transcripts VEP itself annotates against,
+        # else the genes of an annotation carrying no transcript level (gene ->
+        # CDS), else bare feature_type records owning no gene at all. Taking one
+        # level keeps a locus from counting once per tier of its own hierarchy
         units = hits.rnas or hits.genes or hits[feature_type]
         feature = _select_unit(units, row.get("Feature"))
         qualifier_hit = _type_qualifier(feature, feature_type, qualifiers)

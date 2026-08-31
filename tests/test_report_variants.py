@@ -294,3 +294,91 @@ def test_report_variants_exact_match_rejects_substring_query(annotations):
         tsv, features, set(), "CDS", ["product"], query_list=["FKS1"], exact_match=True
     )
     assert lines[0].startswith("1.3-beta-glucan.synthase.component.FKS1: ")
+
+
+# --------------------------------------------------------------------------- #
+# unit selection (VEP's 'Feature' column as a tiebreak, not as an ID lookup)
+# --------------------------------------------------------------------------- #
+
+# two transcripts overlapping one locus, each naming itself with a `Name` that
+# differs from its `ID`: the case where VEP's GFF parser reports `Name` in its
+# `Feature` column while this package keys features on `ID`, so an ID lookup
+# would resolve nothing and the coordinate alone cannot pick between the two
+_OVERLAP_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene-a;Name=FKS1",
+        "chr1\t.\tmRNA\t1\t1000\t.\t+\t.\tID=rna-a;Name=FKS1-T1;Parent=gene-a",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-a;Parent=rna-a;"
+        "product=1%2C3-beta-glucan synthase component FKS1",
+        "chr1\t.\tgene\t1\t1000\t.\t-\t.\tID=gene-b;Name=ERG11",
+        "chr1\t.\tmRNA\t1\t1000\t.\t-\t.\tID=rna-b;Name=ERG11-T1;Parent=gene-b",
+        "chr1\t.\tCDS\t1\t1000\t.\t-\t0\tID=cds-b;Parent=rna-b;"
+        "product=lanosterol 14-alpha demethylase",
+    ]
+) + "\n"
+
+
+@pytest.fixture
+def overlapping(tmp_path):
+    """Report the one variant over the overlapping locus, under a given VEP
+    ``Feature`` value."""
+    gff = tmp_path / "overlap.gff"
+    gff.write_text(_OVERLAP_GFF)
+
+    def _run(vep_feature, qualifiers=("product",), **kwargs):
+        tsv = tmp_path / "overlap.tsv"
+        tsv.write_text(
+            "#Uploaded_variation\tLocation\tAllele\tConsequence\tFeature\tHGVSc\tHGVSp\n"
+            f"chr1_100_T/C\tchr1:100\tC\tmissense_variant\t{vep_feature}\t"
+            "x:c.428A>G\ty:p.Lys143Arg\n"
+        )
+        return rv.report_variants(
+            str(tsv), assimilate_gff(str(gff)), set(), "CDS", list(qualifiers), **kwargs
+        )
+
+    return _run
+
+
+def test_report_variants_matches_vep_feature_against_name_attribute(overlapping):
+    # 'ERG11-T1' is the mRNA's Name and never its ID, so the old ID lookup would
+    # have resolved nothing; both transcripts overlap the variant, so the Feature
+    # column is what has to choose between them
+    assert overlapping("ERG11-T1") == [
+        'lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" '
+        "(missense_variant c.428A>G p.Lys143Arg)"
+    ]
+
+
+def test_report_variants_name_match_discriminates_overlapping_transcripts(overlapping):
+    # the sibling Name resolves to the other locus's product, so the tiebreak is
+    # discriminating rather than returning whichever unit happened to sort first
+    assert overlapping("FKS1-T1") == [
+        '1.3-beta-glucan.synthase.component.FKS1: '
+        '"1,3-beta-glucan synthase component FKS1" '
+        "(missense_variant c.428A>G p.Lys143Arg)"
+    ]
+
+
+def test_report_variants_still_matches_vep_feature_against_id(overlapping):
+    # an annotation whose VEP parser reported ID instead must keep resolving
+    assert overlapping("rna-b") == [
+        'lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" '
+        "(missense_variant c.428A>G p.Lys143Arg)"
+    ]
+
+
+def test_report_variants_drops_ambiguous_overlap_no_feature_answers_to(overlapping):
+    # two units overlap and neither answers to the Feature, so the row cannot be
+    # attributed to either and is dropped rather than guessed at
+    assert overlapping("rna-c") == []
+
+
+def test_report_variants_name_selected_unit_drives_the_query_label(overlapping):
+    # the unit the Name picked is also the one the --query_genes term is matched
+    # against, so the report is labelled off the transcript VEP actually named
+    assert overlapping("ERG11-T1", qualifiers=("product", "Name"),
+                       query_list=["ERG11"]) == [
+        'ERG11: "lanosterol 14-alpha demethylase" '
+        "(missense_variant c.428A>G p.Lys143Arg)"
+    ]
