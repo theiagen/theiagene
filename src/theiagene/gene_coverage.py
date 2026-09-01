@@ -267,10 +267,8 @@ def summarize_measurements(
     """Reduce one per-query measurement to its ``(mean, total)`` across queries.
 
     ``per_base`` weights each query by its quantified length, so the mean is
-    taken over every base rather than over the per-query values; otherwise every
-    query counts once no matter how long it is. Depth and breadth are per-base
-    quantities, so they average per base; reads are counted per query, so they
-    average per query.
+    taken over every base rather than over the per-query values; Depth and breadth 
+    average per base; reads average per query.
 
     Nothing measured means there is no number to report rather than a zero, so
     both figures come back as ``""`` -- the blank matching how an unmeasured
@@ -291,8 +289,8 @@ def summarize_measurements(
 def render_total(value) -> str:
     """Render a total for output.
 
-    Every value is summed as a float, but a whole total -- a read count, above
-    all -- should read as 140 rather than 140.0."""
+    Every value is summed as a float, but a whole total reads as 140 rather 
+    than 140.0."""
     if value != "" and float(value).is_integer():
         return str(int(value))
     return str(value)
