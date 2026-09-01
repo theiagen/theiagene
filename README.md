@@ -85,15 +85,30 @@ theiagene extract_variants \
 
 ### report_variants
 
-Render a VEP `--tab` output TSV into gene-labelled report lines. Rows with a
-suppressed consequence, no HGVSc/HGVSp string, or a feature that resolves to no
-CDS product are dropped. Each remaining row becomes a gene label, the quoted CDS
-product resolved through the reference GFF, and the consequence with the
-transcript/protein prefixes stripped from its HGVS strings, e.g.:
+Render a VEP `--tab` output TSV into gene-labelled report lines. Each kept row
+becomes a gene label, the quoted CDS product resolved through the reference GFF,
+and the consequence with the transcript/protein prefixes stripped from its HGVS
+strings, e.g.:
 
 ```
 ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)
 ```
+
+A row is tied back to the annotation by its `Location` rather than by its
+`Feature` column: the identifier VEP writes there is whichever attribute its own
+GFF parser read off the transcript (`ID`, `Name`, `transcript_id`), which varies
+by annotation source and need not be the `ID` this package keys features on. The
+variant's coordinates select every overlapping annotation unit — the transcripts
+where the annotation has them, else genes, else bare CDS records — and `Feature`
+is consulted only to choose between several units overlapping one variant, since
+VEP emits a separate row per transcript and each row's HGVS strings belong to
+exactly one of them.
+
+A row is dropped when its consequence is suppressed, when it carries neither an
+HGVSc nor an HGVSp string, when its `Location` does not parse, or when that
+location resolves to no CDS product — because nothing overlaps it, because
+several units do and none answers to the row's `Feature`, or because the
+resolved unit carries no `--feature_qualifier` attribute.
 
 The label is the `--query_genes` term (or, failing that, the `--bedfile` name column)
 matching the row's feature — the name that was asked about rather than the full
