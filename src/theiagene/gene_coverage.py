@@ -246,6 +246,84 @@ def flag_reads_mapped(reads_dict: dict, min_reads_mapped: int = 1) -> dict:
     }
 
 
+def measured_values(data_dict: dict, lengths_dict: dict) -> dict:
+    """Return the ``label -> float`` measurements that carry a real number.
+
+    A query reported as ``NOT_APPLICABLE`` -- one that resolved to no
+    coordinates -- was never measured, which is not a measured zero, so it
+    contributes to neither a mean nor a total. A query with no quantified length
+    is dropped for the same reason: nothing was measured to weight."""
+    return {
+        label: float(value)
+        for label, value in data_dict.items()
+        if value != NOT_APPLICABLE
+        and lengths_dict.get(label, NOT_APPLICABLE) != NOT_APPLICABLE
+    }
+
+
+def summarize_measurements(
+    data_dict: dict, lengths_dict: dict, per_base: bool
+) -> tuple:
+    """Reduce one per-query measurement to its ``(mean, total)`` across queries.
+
+    ``per_base`` weights each query by its quantified length, so the mean is
+    taken over every base rather than over the per-query values; otherwise every
+    query counts once no matter how long it is. Depth and breadth are per-base
+    quantities, so they average per base; reads are counted per query, so they
+    average per query.
+
+    Nothing measured means there is no number to report rather than a zero, so
+    both figures come back as ``""`` -- the blank matching how an unmeasured
+    query itself reports."""
+    measured = measured_values(data_dict, lengths_dict)
+    if per_base:
+        weights = {label: float(lengths_dict[label]) for label in measured}
+    else:
+        weights = {label: 1.0 for label in measured}
+
+    denominator = sum(weights.values())
+    if not denominator:
+        return "", ""
+    mean = sum(measured[label] * weights[label] for label in measured) / denominator
+    return mean, sum(measured.values())
+
+
+def render_total(value) -> str:
+    """Render a total for output.
+
+    Every value is summed as a float, but a whole total -- a read count, above
+    all -- should read as 140 rather than 140.0."""
+    if value != "" and float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def write_summaries(
+    depth_dict: dict, coverage_dict: dict, reads_dict: dict, lengths_dict: dict
+) -> dict:
+    """Write the across-query mean and total of each measurement, one scalar per
+    file (``MEAN_DEPTH``, ``TOTAL_READS``, ...), and return them keyed the same
+    way.
+
+    Each pair is one line consumers read directly, so the summary is computed
+    once here rather than re-derived from the per-query JSON by every caller."""
+    summaries = {}
+    # metric -> (per-query values, per-base mean?); see summarize_measurements
+    metrics = (
+        ("DEPTH", depth_dict, True),
+        ("COVERAGE", coverage_dict, True),
+        ("READS", reads_dict, False),
+    )
+    for name, data_dict, per_base in metrics:
+        mean, total = summarize_measurements(data_dict, lengths_dict, per_base)
+        summaries[f"MEAN_{name}"] = str(mean)
+        summaries[f"TOTAL_{name}"] = render_total(total)
+    for filename, value in summaries.items():
+        with open(filename, "w") as out:
+            out.write(value)
+    return summaries
+
+
 def make_tsv(
     depth_dict: dict,
     coverage_dict: dict,
@@ -375,6 +453,7 @@ def run_cli(args: argparse.Namespace) -> int:
     write_json("READS_DICT.json", reads_dict)
     write_json("READS_PASS_DICT.json", pass_dict)
     write_json("LENGTHS_DICT.json", lengths_dict)
+    write_summaries(depth_dict, coverage_dict, reads_dict, lengths_dict)
 
     tsv_str = make_tsv(
         depth_dict, coverage_dict, reads_dict, pass_dict,

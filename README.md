@@ -47,6 +47,15 @@ contigs reports their combined length.
 A query gene that resolves to no coordinates in the annotation is reported as
 `NA` in all five outputs.
 
+Each measurement is also summarized across genes into a single-value file:
+`MEAN_DEPTH`, `MEAN_COVERAGE`, `MEAN_READS`, `TOTAL_DEPTH`, `TOTAL_COVERAGE` and
+`TOTAL_READS`. Depth and breadth are per-base quantities, so their means weight
+each gene by its quantified length — the mean over every quantified base rather
+than the mean of per-gene values; reads are counted per gene, so their mean
+counts each gene once. A gene reported as `NA` was never measured, so it enters
+neither the mean nor the total; when nothing was measured at all, both files are
+blank rather than `0`.
+
 | filter | effect |
 | --- | --- |
 | always applied | unmapped, secondary, supplementary, QC_fail and duplicate alignments are excluded |

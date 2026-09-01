@@ -217,6 +217,80 @@ def test_flag_reads_mapped_passes_na_through_uncalled():
 
 
 # --------------------------------------------------------------------------- #
+# summarize_measurements / render_total / write_summaries
+# --------------------------------------------------------------------------- #
+
+def test_summarize_measurements_per_base_weights_by_quantified_length():
+    # 10 bases at depth 1 and 90 at depth 11 average to 10 per base, not to the
+    # 6.0 an unweighted mean of the two per-gene values would give
+    mean, total = gene_coverage.summarize_measurements(
+        {"short": 1.0, "long": 11.0}, {"short": 10, "long": 90}, per_base=True
+    )
+    assert mean == 10.0
+    assert total == 12.0
+
+
+def test_summarize_measurements_per_query_counts_each_gene_once():
+    # reads are counted per gene, so gene length does not weight their mean
+    mean, total = gene_coverage.summarize_measurements(
+        {"short": 1.0, "long": 11.0}, {"short": 10, "long": 90}, per_base=False
+    )
+    assert mean == 6.0
+    assert total == 12.0
+
+
+def test_summarize_measurements_excludes_unmeasured_queries():
+    # an unresolved query was never measured, which is not a measured zero: it
+    # enters neither the mean nor the total, on either basis
+    data = {"geneA": 4.0, "ghost": "NA"}
+    lengths = {"geneA": 10, "ghost": "NA"}
+    assert gene_coverage.summarize_measurements(data, lengths, per_base=True) == (
+        4.0,
+        4.0,
+    )
+    assert gene_coverage.summarize_measurements(data, lengths, per_base=False) == (
+        4.0,
+        4.0,
+    )
+
+
+def test_summarize_measurements_reports_nothing_measured_as_blank():
+    # no measurement means there is no number to report, not a zero
+    assert gene_coverage.summarize_measurements(
+        {"ghost": "NA"}, {"ghost": "NA"}, per_base=True
+    ) == ("", "")
+    assert gene_coverage.summarize_measurements({}, {}, per_base=False) == ("", "")
+
+
+def test_render_total_drops_a_whole_total_decimal():
+    # a read count should read as 140, not 140.0
+    assert gene_coverage.render_total(140.0) == "140"
+    assert gene_coverage.render_total(3.5) == "3.5"
+    # a blank (nothing measured) stays blank rather than becoming a number
+    assert gene_coverage.render_total("") == ""
+
+
+def test_write_summaries_writes_one_scalar_per_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    summaries = gene_coverage.write_summaries(
+        {"geneA": 2.0, "geneB": 4.0},
+        {"geneA": 50.0, "geneB": 100.0},
+        {"geneA": 3, "geneB": 7},
+        {"geneA": 10, "geneB": 10},
+    )
+    assert summaries == {
+        "MEAN_DEPTH": "3.0",
+        "TOTAL_DEPTH": "6",
+        "MEAN_COVERAGE": "75.0",
+        "TOTAL_COVERAGE": "150",
+        "MEAN_READS": "5.0",
+        "TOTAL_READS": "10",
+    }
+    for filename, value in summaries.items():
+        assert (tmp_path / filename).read_text() == value
+
+
+# --------------------------------------------------------------------------- #
 # union_intervals
 # --------------------------------------------------------------------------- #
 
@@ -861,6 +935,17 @@ def _read_lengths():
         return json.load(fh)
 
 
+def _read_summaries():
+    """Load the across-query means and totals run_cli writes, one per file."""
+    names = ("DEPTH", "COVERAGE", "READS")
+    filenames = [f"{stat}_{name}" for name in names for stat in ("MEAN", "TOTAL")]
+    summaries = {}
+    for filename in filenames:
+        with open(filename) as fh:
+            summaries[filename] = fh.read()
+    return summaries
+
+
 def _write_bed(tmp_path, rows, name="regions.bed"):
     bed = tmp_path / name
     bed.write_text("".join(f"{c}\t{s}\t{e}\t{n}\n" for c, s, e, n in rows))
@@ -901,6 +986,54 @@ def test_run_cli_gff_with_query_genes_writes_all_outputs(tmp_path, make_bam, mon
         "\tquantified_length"
     )
     assert "geneA\t1.0\t100.0\t1\tTrue\t10" in tsv
+    # one measured gene: every summary is that gene's own value
+    assert _read_summaries() == {
+        "MEAN_DEPTH": "1.0",
+        "TOTAL_DEPTH": "1",
+        "MEAN_COVERAGE": "100.0",
+        "TOTAL_COVERAGE": "100",
+        "MEAN_READS": "1.0",
+        "TOTAL_READS": "1",
+    }
+
+
+def test_run_cli_summarizes_across_genes(tmp_path, make_bam, monkeypatch):
+    # two genes of unequal quantified length, only one of them covered
+    bed = _write_bed(
+        tmp_path, [("contig1", 10, 20, "geneA"), ("contig1", 60, 90, "geneB")]
+    )
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    args = _cli_args(bam, bedfile=bed)
+
+    monkeypatch.chdir(tmp_path)
+    assert gene_coverage.run_cli(args) == 0
+
+    depth, coverage, reads, _ = _read_outputs()
+    assert depth == {"geneA": 1.0, "geneB": 0.0}
+    assert coverage == {"geneA": 100.0, "geneB": 0.0}
+    assert reads == {"geneA": 1, "geneB": 0}
+    summaries = _read_summaries()
+    # depth and breadth weight each gene by its 10 and 30 quantified bases, so
+    # the covered gene contributes a quarter rather than the half an unweighted
+    # mean of the per-gene values would give
+    assert summaries["MEAN_DEPTH"] == "0.25"
+    assert summaries["MEAN_COVERAGE"] == "25.0"
+    # reads are counted per gene, so their mean counts each gene once
+    assert summaries["MEAN_READS"] == "0.5"
+    assert summaries["TOTAL_READS"] == "1"
+
+
+def test_run_cli_summarizes_an_unresolved_query_as_blank(tmp_path, make_bam, monkeypatch):
+    gff = _write_gff(tmp_path)
+    bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
+    # the only query resolves to no coordinates, so nothing is ever measured
+    args = _cli_args(bam, reference_gff=gff, query_genes="ghost_gene")
+
+    monkeypatch.chdir(tmp_path)
+    assert gene_coverage.run_cli(args) == 0
+
+    # blank rather than 0, matching how the unmeasured gene itself reports
+    assert set(_read_summaries().values()) == {""}
 
 
 def test_run_cli_bed_as_coordinate_source(tmp_path, make_bam, monkeypatch):
