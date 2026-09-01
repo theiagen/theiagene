@@ -293,14 +293,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--min_depth", type=int, default=1)
     parser.add_argument(
         "--min_base_quality",
-        # the dest follows the first option string, so the alias fills
-        # `min_base_quality` and callers pinned to the old name keep working
-        "--min_quality",
         type=int,
         default=0,
         help="minimum base quality for a base to count toward depth/breadth and "
-        "for the read carrying it to count as mapped; '--min_quality' is a "
-        "deprecated alias",
+        "for the read carrying it to count as mapped",
     )
     parser.add_argument(
         "--min_mapping_quality",
