@@ -280,12 +280,15 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--bam", required=True)
     parser.add_argument("--bedfile")
     parser.add_argument("--reference_gff")
-    parser.add_argument("--query_genes", nargs="+")
+    parser.add_argument(
+        "--query_genes",
+        help="comma-delimited query gene name(s); a name may contain spaces",
+    )
     parser.add_argument("--feature_type", default="CDS")
     parser.add_argument(
         "--feature_qualifier",
         default="product",
-        help="comma-/space-delimited attribute key(s), matched case-insensitively, "
+        help="comma-delimited attribute key(s), matched case-insensitively, "
         "used to collect query-gene name candidates",
     )
     parser.add_argument("--exact_match", action="store_true")

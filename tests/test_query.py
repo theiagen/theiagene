@@ -56,16 +56,23 @@ def test_match_query_returns_first_query_in_order():
     assert query.match_query(["b", "a"], ["a", "b"], exact_match=True) == "b"
 
 
-def test_ordered_query_genes_flattens_and_dedupes():
-    assert query.ordered_query_genes(["a,b", "b,c", " d "]) == ["a", "b", "c", "d"]
+def test_ordered_query_genes_splits_and_dedupes():
+    assert query.ordered_query_genes("a,b, b ,c, d ") == ["a", "b", "c", "d"]
     assert query.ordered_query_genes(None) == []
-    assert query.ordered_query_genes([]) == []
+    assert query.ordered_query_genes("") == []
     # blank chunks are dropped
-    assert query.ordered_query_genes(["a,,b", " "]) == ["a", "b"]
+    assert query.ordered_query_genes("a,,b, ") == ["a", "b"]
+    # whitespace is not a delimiter: a name may contain spaces
+    assert query.ordered_query_genes("lanosterol 14-alpha demethylase,FKS1") == [
+        "lanosterol 14-alpha demethylase",
+        "FKS1",
+    ]
 
 
-def test_split_qualifiers_splits_on_commas_and_spaces():
-    assert query.split_qualifiers("product,gene Name") == ["product", "gene", "Name"]
+def test_split_qualifiers_splits_on_commas_only():
+    assert query.split_qualifiers("product,gene,Name") == ["product", "gene", "Name"]
+    # whitespace is not a delimiter, only stripped from the ends of each token
+    assert query.split_qualifiers("product, gene Name") == ["product", "gene Name"]
     # empty tokens from doubled/leading delimiters are dropped
     assert query.split_qualifiers(" ,product, ") == ["product"]
     # a None/empty input (e.g. an unset --suppress) yields an empty list

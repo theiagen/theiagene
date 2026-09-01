@@ -59,25 +59,33 @@ def match_query(query_list, identifiers, exact_match: bool):
     return None
 
 
+def split_csv(raw) -> list:
+    """Split a comma-delimited argument into its stripped, non-empty tokens.
+
+    Commas are the only delimiter, so a token may itself contain whitespace
+    (e.g. a product name such as 'lanosterol 14-alpha demethylase'). A
+    None/empty input yields an empty list."""
+    if not raw:
+        return []
+    return [token for token in (chunk.strip() for chunk in raw.split(",")) if token]
+
+
 def ordered_query_genes(query_genes_arg) -> list:
-    """Flatten the --query_genes argument into an ordered, de-duplicated list"""
+    """Split the comma-delimited --query_genes argument into an ordered,
+    de-duplicated list"""
     ordered = []
     seen = set()
-    for chunk in query_genes_arg or []:
-        for gene in chunk.split(","):
-            gene = gene.strip()
-            if gene and gene not in seen:
-                seen.add(gene)
-                ordered.append(gene)
+    for gene in split_csv(query_genes_arg):
+        if gene not in seen:
+            seen.add(gene)
+            ordered.append(gene)
     return ordered
 
 
 def split_qualifiers(raw) -> list:
-    """Split a comma-/space-delimited qualifier string into individual keys,
-    dropping empty tokens. A None/empty input yields an empty list."""
-    if not raw:
-        return []
-    return raw.replace(",", " ").split()
+    """Split a comma-delimited qualifier string into individual keys, dropping
+    empty tokens. A None/empty input yields an empty list."""
+    return split_csv(raw)
 
 
 def iter_descendants(feature):

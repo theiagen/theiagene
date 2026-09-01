@@ -62,7 +62,7 @@ theiagene gene_coverage \
 theiagene gene_coverage \
   --bam sample.sorted.bam \
   --reference_gff reference.gff \
-  --query_genes FKS1 ERG11
+  --query_genes FKS1,ERG11
 ```
 
 ### extract_variants
@@ -76,7 +76,7 @@ in a `GENE` INFO field. Output defaults to `EXTRACTED_VARIANTS.vcf`.
 theiagene extract_variants \
   --vcf sample.vcf \
   --reference_gff reference.gff \
-  --query_genes FKS1 ERG11
+  --query_genes FKS1,ERG11
 
 theiagene extract_variants \
   --vcf sample.vcf \

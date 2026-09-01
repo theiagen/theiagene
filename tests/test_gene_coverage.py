@@ -123,7 +123,7 @@ class _Args:
 
 def test_input_error_handling_accepts_gff_with_query_genes():
     gene_coverage.input_error_handling(
-        _Args(reference_gff="ref.gff", query_genes=["geneA"])
+        _Args(reference_gff="ref.gff", query_genes="geneA")
     )
 
 
@@ -134,7 +134,7 @@ def test_input_error_handling_accepts_bedfile_alone():
 
 def test_input_error_handling_requires_a_coordinate_source():
     with pytest.raises(FileNotFoundError, match="reference_gff.*bedfile|bedfile"):
-        gene_coverage.input_error_handling(_Args(query_genes=["geneA"]))
+        gene_coverage.input_error_handling(_Args(query_genes="geneA"))
 
 
 def test_input_error_handling_requires_query_genes_without_bed():
@@ -884,7 +884,7 @@ def _make_multicontig_bam(path, contigs):
 def test_run_cli_gff_with_query_genes_writes_all_outputs(tmp_path, make_bam, monkeypatch):
     gff = _write_gff(tmp_path)
     bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
-    args = _cli_args(bam, reference_gff=gff, query_genes=["geneA"])
+    args = _cli_args(bam, reference_gff=gff, query_genes="geneA")
 
     monkeypatch.chdir(tmp_path)
     assert gene_coverage.run_cli(args) == 0
@@ -968,7 +968,7 @@ def test_run_cli_reports_unresolved_query_as_na_and_warns(
     gff = _write_gff(tmp_path)
     bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
     # a query term that matches no GFF feature resolves no coordinates
-    args = _cli_args(bam, reference_gff=gff, query_genes=["ghost_gene"])
+    args = _cli_args(bam, reference_gff=gff, query_genes="ghost_gene")
 
     monkeypatch.chdir(tmp_path)
     with caplog.at_level("WARNING"):
@@ -991,7 +991,7 @@ def test_run_cli_min_mapping_quality_gates_depth_and_reads(
     # the fixture read has mapping quality 60, below this threshold
     bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
     args = _cli_args(
-        bam, reference_gff=gff, query_genes=["geneA"], min_mapping_quality=61
+        bam, reference_gff=gff, query_genes="geneA", min_mapping_quality=61
     )
 
     monkeypatch.chdir(tmp_path)
@@ -1012,7 +1012,7 @@ def test_run_cli_min_reads_mapped_flags_without_filtering(
     # the BAM carries a single read, below this threshold
     bam = make_bam(contig="contig1", contig_len=100, read_start=10, read_len=50)
     args = _cli_args(
-        bam, reference_gff=gff, query_genes=["geneA"], min_reads_mapped=10
+        bam, reference_gff=gff, query_genes="geneA", min_reads_mapped=10
     )
 
     monkeypatch.chdir(tmp_path)
