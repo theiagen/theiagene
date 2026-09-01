@@ -358,7 +358,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--reference_gff")
     parser.add_argument(
         "--query_genes",
-        help="comma-delimited query gene name(s); a name may contain spaces",
+        help="comma-delimited query gene name(s)",
     )
     parser.add_argument("--feature_type", default="CDS")
     parser.add_argument(

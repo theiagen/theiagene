@@ -79,7 +79,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--vcf", required=True)
     parser.add_argument(
         "--query_genes",
-        help="comma-delimited query gene name(s); a name may contain spaces",
+        help="comma-delimited query gene name(s)",
     )
     parser.add_argument("--bedfile")
     parser.add_argument("--reference_gff")

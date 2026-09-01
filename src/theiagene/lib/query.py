@@ -62,9 +62,7 @@ def match_query(query_list, identifiers, exact_match: bool):
 def split_csv(raw) -> list:
     """Split a comma-delimited argument into its stripped, non-empty tokens.
 
-    Commas are the only delimiter, so a token may itself contain whitespace
-    (e.g. a product name such as 'lanosterol 14-alpha demethylase'). A
-    None/empty input yields an empty list."""
+    A None/empty input yields an empty list."""
     if not raw:
         return []
     return [token for token in (chunk.strip() for chunk in raw.split(",")) if token]

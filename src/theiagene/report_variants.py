@@ -410,9 +410,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--reference_gff", required=True)
     parser.add_argument(
         "--query_genes",
-        help="comma-delimited query gene name(s), which may contain spaces; each "
-        "report line is labelled by the query term matching its feature rather "
-        "than by the resolved CDS product",
+        help="comma-delimited query gene name(s)
     )
     parser.add_argument(
         "--bedfile",
