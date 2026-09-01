@@ -410,7 +410,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--reference_gff", required=True)
     parser.add_argument(
         "--query_genes",
-        help="comma-delimited query gene name(s)
+        help="comma-delimited query gene name(s)"
     )
     parser.add_argument(
         "--bedfile",
