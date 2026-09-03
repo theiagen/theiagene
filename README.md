@@ -46,11 +46,10 @@ coordinate source and one query source is required (`--bedfile` alone satisfies
 both); `report_variants` _requires_ a GFF, so its `--bedfile` only
 ever supplies names.
 
-How a query term is matched depends on which source it is matched against: names
-from a GFF are matched case-insensitively and as substrings (tighten with
-`--exact_match`), whereas BED rows are selected by an exact, case-sensitive match
-on the name column. `--query_genes erg11` therefore finds `ERG11` in a GFF but
-not in a BED.
+GFF query matching is case-insensitive and accommodates substrings (unless
+`--exact_match` is specified), whereas BED rows are selected by an exact, 
+case-sensitive match on the name column. `--query_genes erg11` therefore 
+finds `ERG11` in a GFF but not in a BED.
 
 ### gene_coverage
 
