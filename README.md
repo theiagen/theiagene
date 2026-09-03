@@ -21,13 +21,6 @@ pip install -e '.[test]'
 
 ## Usage
 
-```bash
-theiagene --help
-theiagene gene_coverage --help
-theiagene extract_variants --help
-theiagene report_variants --help
-```
-
 ### Query and coordinate sources
 
 Query and coordinate arguments are handled hierarchically:
@@ -51,7 +44,17 @@ GFF query matching is case-insensitive and accommodates substrings (unless
 case-sensitive match on the name column. `--query_genes erg11` therefore 
 finds `ERG11` in a GFF but not in a BED.
 
-### gene_coverage
+
+### Subcommands
+
+```bash
+theiagene --help
+theiagene gene_coverage --help
+theiagene extract_variants --help
+theiagene report_variants --help
+```
+
+#### gene_coverage
 
 Report average depth, percent coverage, mapped reads, and quantified length per
 query gene, over the coordinates resolved as described above; outputs are
@@ -97,7 +100,7 @@ theiagene gene_coverage \
   --query_genes FKS1,ERG11
 ```
 
-### extract_variants
+#### extract_variants
 
 Write a sub-VCF containing only the variants that overlap the `feature_type`
 (CDS by default) segments of the query genes, over the coordinates resolved as
@@ -115,7 +118,7 @@ theiagene extract_variants \
   --bedfile regions.bed
 ```
 
-### report_variants
+#### report_variants
 
 Render a VEP `--tab` output TSV into gene-labelled report lines. Each kept row
 becomes a gene label, the quoted CDS product resolved through the reference GFF,
