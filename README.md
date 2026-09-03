@@ -28,10 +28,34 @@ theiagene extract_variants --help
 theiagene report_variants --help
 ```
 
+### Query and coordinate sources
+
+Query and coordinate arguments are handled hierarchically:
+
+| given | query source | coordinate source |
+| --- | --- | --- |
+| `--query_genes` + `--reference_gff` | the query terms | the GFF |
+| `--query_genes` + `--reference_gff` + `--bedfile` | the query terms | the GFF — the BED is unused |
+| `--query_genes` + `--bedfile` | the query terms | the BED rows they name |
+| `--reference_gff` + `--bedfile` | the BED name column | the GFF |
+| `--bedfile` alone | every BED row | the BED |
+
+A GFF is the preferred query coordinate source, and `--query_genes` is the preferred
+query name source — a BED steps in for whichever may be missing. At least one
+coordinate source and one query source is required (`--bedfile` alone satisfies
+both); `report_variants` _requires_ a GFF, so its `--bedfile` only
+ever supplies names.
+
+How a query term is matched depends on which source it is matched against: names
+from a GFF are matched case-insensitively and as substrings (tighten with
+`--exact_match`), whereas BED rows are selected by an exact, case-sensitive match
+on the name column. `--query_genes erg11` therefore finds `ERG11` in a GFF but
+not in a BED.
+
 ### gene_coverage
 
 Report average depth, percent coverage, mapped reads, and quantified length per
-query gene. Coordinates come from a reference GFF or a BED file; outputs are
+query gene, over the coordinates resolved as described above; outputs are
 written to the working directory as `DEPTH_DICT.json`, `COVERAGE_DICT.json`,
 `READS_DICT.json`, `READS_PASS_DICT.json`, `LENGTHS_DICT.json` and
 `COVERAGE_STATS.tsv`. A gene whose mapped reads fall below `--min_reads_mapped`
@@ -77,8 +101,8 @@ theiagene gene_coverage \
 ### extract_variants
 
 Write a sub-VCF containing only the variants that overlap the `feature_type`
-(CDS by default) segments of the query genes. Coordinates come from a reference
-GFF or a BED file; each kept record is annotated with the query that retrieved it
+(CDS by default) segments of the query genes, over the coordinates resolved as
+described above. Each kept record is annotated with the query that retrieved it
 in a `GENE` INFO field. Output defaults to `EXTRACTED_VARIANTS.vcf`.
 
 ```bash
