@@ -34,11 +34,11 @@ Query and coordinate arguments are handled hierarchically:
 
 | given | query source | coordinate source |
 | --- | --- | --- |
-| `--query_genes` + `--reference_gff` | the query terms | the GFF |
-| `--query_genes` + `--reference_gff` + `--bedfile` | the query terms | the GFF — the BED is unused |
-| `--query_genes` + `--bedfile` | the query terms | the BED rows they name |
-| `--reference_gff` + `--bedfile` | the BED name column | the GFF |
-| `--bedfile` alone | every BED row | the BED |
+| `--query_genes` + `--reference_gff` | query terms | GFF |
+| `--query_genes` + `--reference_gff` + `--bedfile` | query terms | GFF — BED is ignored |
+| `--query_genes` + `--bedfile` | query terms | corresponding BED coordinate columns |
+| `--reference_gff` + `--bedfile` | BED name column | GFF |
+| `--bedfile` alone | BED name column | BED coordinate columns |
 
 A GFF is the preferred query coordinate source, and `--query_genes` is the preferred
 query name source — a BED steps in for whichever may be missing. At least one
