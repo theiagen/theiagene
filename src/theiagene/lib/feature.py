@@ -282,7 +282,8 @@ class FeatureCol:
     Features of a canonical class are then reachable both as attributes
     (`.genes`, `.rnas`, `.cds`, `.exons`) and by key (`fl["gene"]`,
     `fl["mRNA"]`); both resolve to the same lists, extracted once by
-    `_extract_types`."""
+    `_extract_types`, which also files every feature under its contig for
+    `by_seqid`/`index`."""
 
     def __init__(self, features: list = None, group: bool = True):
         self.features = list(features) if features is not None else []
@@ -307,14 +308,20 @@ class FeatureCol:
 
     def _extract_types(self):
         """Bucket features by canonical class and store each list as an
-        attribute (`self.genes`, `self.rnas`, `self.cds`, `self.exons`), and
-        build the `fid` -> Feature index used by `by_id`/`get`.
+        attribute (`self.genes`, `self.rnas`, `self.cds`, `self.exons`), build
+        the `fid` -> Feature index used by `by_id`/`get`, and file each feature
+        under its `seqid` for `by_seqid`/`index`.
+
+        All three are populated in one pass and rebuilt whenever `self.features`
+        is replaced (`sort`), so a coordinate lookup cannot go stale against a
+        reordered collection.
 
         Raises KeyError if two features share an `fid` (after any deduplication
         `group_features` applied), so an ambiguous index is surfaced rather than
         silently collapsed."""
         buckets = {name: [] for name in _FEATURE_CLASSES}
         index = {}
+        contigs = defaultdict(list)
         for feature in self.features:
             cls = self._class_of(feature.type)
             if cls is not None:
@@ -322,8 +329,11 @@ class FeatureCol:
             if feature.fid in index:
                 raise KeyError(f"duplicate feature ID in collection: {feature.fid!r}")
             index[feature.fid] = feature
+            contigs[feature.seqid].append(feature)
         self._buckets = buckets
         self._index = index
+        # a plain dict, so a miss in by_seqid/index cannot quietly seed a contig
+        self._contigs = dict(contigs)
         self.genes = buckets["gene"]
         self.rnas = buckets["rna"]
         self.cds = buckets["cds"]
@@ -367,6 +377,46 @@ class FeatureCol:
         full hierarchy stays reachable through `.descendants`; grouping is
         skipped to preserve those links rather than rebuild them."""
         return FeatureCol([f for f in self.features if f.parent is None], group=False)
+
+    def by_seqid(self, seqid):
+        """Return a new FeatureCol of the features on contig `seqid`, in this
+        collection's order (an empty FeatureCol when the contig carries none).
+
+        Each feature keeps its existing `parent`/`descendants` wiring -- grouping
+        is skipped, as in `roots()`, so the full hierarchy stays reachable through
+        `.descendants` rather than being rebuilt from a single-contig view. Only
+        the features in `self.features` are filed under a contig; descendants
+        reachable only through `.descendants` (e.g. after `roots()`) are not,
+        mirroring `by_id` and the class buckets."""
+        return FeatureCol(self._contigs.get(seqid, []), group=False)
+
+    def index(self, seqid, start, end=None):
+        """Return a new FeatureCol of the features on contig `seqid` overlapping
+        the coordinate range [`start`, `end`) -- 0-based and half-open, as Feature
+        coordinates are.
+
+        `end` defaults to `start + 1`, so a bare index queries the single position
+        it names; an `end` at or below `start` names no range and raises
+        ValueError rather than returning a silently empty collection.
+
+        Every overlapping feature is returned regardless of class -- a coding
+        position matches its CDS and the RNA and gene containing it -- because
+        which level answers a positional question is the caller's to decide; narrow
+        with the class keys, e.g. ``features.index('chr1', pos)['CDS']``. The
+        contig-membership caveat of `by_seqid` applies here too."""
+        end = start + 1 if end is None else end
+        if end <= start:
+            raise ValueError(
+                f"index range on contig {seqid!r}: end ({end}) must be > start ({start})"
+            )
+        return FeatureCol(
+            [
+                feature
+                for feature in self._contigs.get(seqid, ())
+                if feature.start < end and feature.end > start
+            ],
+            group=False,
+        )
 
     def by_id(self, fid):
         """Return the Feature whose `fid` equals `fid`, raising KeyError if no
