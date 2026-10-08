@@ -25,7 +25,7 @@ _SUBCOMMANDS = (
     (
         "report_variants",
         report_variants,
-        "render VEP variant annotations into product-named report lines",
+        "render VEP variant annotations into a product-named report TSV",
     ),
 )
 
