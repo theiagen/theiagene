@@ -255,41 +255,59 @@ def annotations(tmp_path):
 def test_report_variants_labels_lines_by_query_gene(annotations):
     gff, tsv = annotations
     features = assimilate_gff(gff)
-    lines, _, _ = rv.report_variants(
+    records = rv.report_variants(
         tsv, features, set(), "CDS", ["product"], query_list=["FKS1"]
     )
-    assert lines == [
+    assert records == [[
+        "FKS1",
+        "rna-x:c.492C>T",
+        # percent-decoded, but the HGVS '=' is kept
+        "prot-x:p.Asp164=",
+        "492C>T",
+        "D164D",
         'FKS1: "1,3-beta-glucan synthase component FKS1" '
-        "(synonymous_variant c.492C>T p.Asp164Asp)"
-    ]
+        "(synonymous_variant c.492C>T p.Asp164Asp)",
+    ]]
 
 
-def test_report_variants_abbreviates_changes_independently(tmp_path):
+def test_report_variants_marks_missing_protein_change_na(tmp_path):
     gff = tmp_path / "reference.gff"
     gff.write_text(_GFF)
     tsv = tmp_path / "annotations.tsv"
-    # the second row has no protein change, so it lands in the nucleotide list only
+    # a splice-region row carries no protein change
     tsv.write_text(
-        _VEP_TSV + "chr1_200_G/A\tchr1:200\tA\tsplice_region_variant\trna-x\t"
+        "#Uploaded_variation\tLocation\tAllele\tConsequence\tFeature\tHGVSc\tHGVSp\n"
+        "chr1_200_G/A\tchr1:200\tA\tsplice_region_variant\trna-x\t"
         "rna-x:c.100+5G>A\t-\n"
     )
     features = assimilate_gff(str(gff))
-    lines, nucleotide, amino_acid = rv.report_variants(
-        str(tsv), features, set(), "CDS", ["product"]
-    )
-    assert len(lines) == 2
-    assert nucleotide == ["492C>T", "100+5G>A"]
-    assert amino_acid == ["D164D"]
+    (record,) = rv.report_variants(str(tsv), features, set(), "CDS", ["product"])
+    assert record[1:5] == ["rna-x:c.100+5G>A", "NA", "100+5G>A", "NA"]
+
+
+def test_run_cli_writes_headed_tsv(annotations, tmp_path):
+    gff, tsv = annotations
+    output = tmp_path / "report.tsv"
+    rv.main([
+        "--vep_tsv", tsv, "--reference_gff", gff,
+        "--query_genes", "FKS1", "--output", str(output),
+    ])
+    header, record = output.read_text().splitlines()
+    assert header == "#GENE\tHGVSc\tHGVSp\tNT\tAA\tREPORT"
+    assert record.split("\t")[:5] == [
+        "FKS1", "rna-x:c.492C>T", "prot-x:p.Asp164=", "492C>T", "D164D"
+    ]
 
 
 def test_report_variants_falls_back_to_product_label(annotations):
     gff, tsv = annotations
     features = assimilate_gff(gff)
     # no query matches this feature, so the product names the line instead
-    lines, _, _ = rv.report_variants(
+    records = rv.report_variants(
         tsv, features, set(), "CDS", ["product"], query_list=["ERG11"]
     )
-    assert lines == [
+    assert records[0][0] == "1.3-beta-glucan.synthase.component.FKS1"
+    assert [record[-1] for record in records] == [
         '1.3-beta-glucan.synthase.component.FKS1: '
         '"1,3-beta-glucan synthase component FKS1" '
         "(synonymous_variant c.492C>T p.Asp164Asp)"
@@ -308,7 +326,7 @@ def test_report_variants_drops_row_whose_hgvs_columns_are_absent(tmp_path):
         "chr1_100_T/C\tchr1:100\tC\tmissense_variant\trna-x\n"
     )
     features = assimilate_gff(str(gff))
-    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == ([], [], [])
+    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == []
 
 
 def test_report_variants_drops_row_truncated_before_its_hgvs_columns(tmp_path):
@@ -322,14 +340,14 @@ def test_report_variants_drops_row_truncated_before_its_hgvs_columns(tmp_path):
         "chr1_100_T/C\tC\tmissense_variant\trna-x\n"
     )
     features = assimilate_gff(str(gff))
-    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == ([], [], [])
+    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == []
 
 
 def test_report_variants_exact_match_rejects_substring_query(annotations):
     gff, tsv = annotations
     features = assimilate_gff(gff)
     # 'FKS1' is only a substring of the product/gene id, so --exact_match drops it
-    lines, _, _ = rv.report_variants(
+    records = rv.report_variants(
         tsv, features, set(), "CDS", ["product"], query_list=["FKS1"], exact_match=True
     )
-    assert lines[0].startswith("1.3-beta-glucan.synthase.component.FKS1: ")
+    assert records[0][-1].startswith("1.3-beta-glucan.synthase.component.FKS1: ")
