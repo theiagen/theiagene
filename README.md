@@ -133,22 +133,25 @@ kept row:
 | `REPORT` | formatted report line (see below) | `ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)` |
 
 The header line is `#`-prefixed (`#GENE  HGVSc  HGVSp  NT  AA  REPORT`), and a
-field the row has no HGVS string for is `NA`. The TSV prints to stdout unless
+`NA` denotes fields that have no HGVS string. The TSV prints to stdout unless
 `--output` is given.
 
-The report line is the gene label, the quoted CDS product resolved through the
-reference GFF, and the consequence with the transcript/protein prefixes stripped
-from its HGVS strings. The label is the `--query_genes` term (or, failing that,
-the `--bedfile` name column) matching the row's feature — the name that was
-asked about rather than the full product it resolved to. With no query list, or
-when none of its terms match, the label falls back to the normalized product
-name (`lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
-The product is quoted so a name carrying commas survives being joined into a
-comma-delimited report. When the source VCF is passed via `--vcf`, the report
-line also carries the variant's per-allele read depths (e.g. `; T:0 C:562`).
+Each report line has the form `label: "product" (consequence)`:
+
+- **label**: the `--query_genes` term that matched the feature, or the `--bedfile`
+  name if there is no query term.
+  If there is no query list or match, the label is the
+  normalized product name
+  (e.g. `lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
+- **product**: the CDS product from the reference GFF. It is quoted so commas
+  do not break the comma-delimited report.
+- **consequence**: the HGVS consequence, without the transcript and protein prefixes.
+
+When the source VCF is passed with `--vcf`, each line also ends with the read
+depth for each allele (e.g. `; T:0 C:562`).
 
 A row is tied back to the annotation by its `Location` rather than by its
-`Feature` column: the identifier VEP writes there is whichever attribute its own
+`Feature` column: the identifier VEP writes is whichever attribute its own
 GFF parser read off the transcript (`ID`, `Name`, `transcript_id`), which varies
 by annotation source and need not be the `ID` this package keys features on. The
 variant's coordinates select every overlapping annotation unit — the transcripts

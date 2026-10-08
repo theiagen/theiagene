@@ -34,11 +34,10 @@ changes, and the report line above. A field the row has no HGVS string for is
     #GENE  HGVSc               HGVSp                 NT      AA     REPORT
     ERG11  rna-x:c.428A>G      prot-x:p.Lys143Arg    428A>G  K143R  ERG11: "..." (...)
 
-The HGVSc/HGVSp columns pass VEP's strings through percent-decoded but
-otherwise untouched. The NT, AA and REPORT columns deviate from HGVS in that
-they drop the reference sequence identifier and the parentheses around
+The HGVSc/HGVSp columns decode VEP's strings (percent-decoded). The NT, AA and REPORT columns deviate from HGVS that
+by dropping the reference sequence identifier and the parentheses around
 predicted protein changes, NT and AA drop the ``c.``/``p.`` prefix, and a
-synonymous change is spelled ``p.Asp164Asp`` rather than ``p.Asp164=`` (see
+synonymous change deviates from HGVS by reiterating the redundant AA (e.g ``p.Asp164Asp`` rather than ``p.Asp164=``, see
 :func:`_hgvs_suffix`, :func:`_expand_synonymous` and :func:`_abbreviate`).
 
 Rows carrying neither an HGVSc nor an HGVSp string are ignored for now."""
@@ -266,8 +265,8 @@ def _hgvs_suffix(value: str, strip_parens: bool = False):
     residue (see :func:`_expand_synonymous`).
 
     ``strip_parens`` drops the parentheses VEP wraps predicted protein changes in
-    (``p.(Lys143Arg)`` -> ``p.Lys143Arg``), deviating from HGVS, which uses them
-    to mark a change as predicted rather than experimentally observed."""
+    (``p.(Lys143Arg)`` -> ``p.Lys143Arg``), which deviates from HGVS because
+    HGVS by dropping parentheses for non-experimentally observed outputs."""
     if value in _UNDEFINED:
         return None
     suffix = unquote(value.split(":", 1)[1] if ":" in value else value)
