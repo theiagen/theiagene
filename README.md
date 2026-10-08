@@ -168,8 +168,8 @@ resolved unit carries no `--feature_qualifier` attribute.
 
 #### Deviations from HGVS
 
-The `HGVSc` and `HGVSp` columns carry VEP's strings unaltered apart from
-percent-decoding. The other columns follow the
+The `HGVSc` and `HGVSp` columns pass VEP's output unaltered following
+decoding percent sign. The other columns follow the
 [HGVS recommendations](https://hgvs-nomenclature.org/) except where noted below.
 One-letter amino acid codes, and `*` for a stop codon, are permitted by HGVS and
 are not deviations.
