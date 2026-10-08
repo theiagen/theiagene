@@ -107,6 +107,26 @@ Lines print to stdout unless `--output` is given. When the source VCF is passed
 via `--vcf`, each line also carries the variant's per-allele read depths (e.g.
 `; T:0 C:562`).
 
+`--nucleotide_output` and `--amino_acid_output` independently write the reported
+variants' abbreviated changes, one per line: nucleotide changes in HGVS form,
+stripped of their prefix (`c.428A>G` → `428A>G`, `c.123_125del` → `123_125del`),
+and amino acid changes with one-letter residue codes (`p.Lys143Arg` → `K143R`,
+`p.Lys143ArgfsTer5` → `K143Rfs*5`). A row lacking an HGVSc or HGVSp string is
+absent from that file only.
+
+#### Deviations from HGVS
+
+The variant strings follow the [HGVS recommendations](https://hgvs-nomenclature.org/)
+except where noted below. One-letter amino acid codes, and `*` for a stop codon,
+are permitted by HGVS and are not deviations.
+
+| deviation | HGVS | reported | applies to |
+| --- | --- | --- | --- |
+| reference sequence identifier dropped (the gene label stands in for it) | `NM_000001.1:c.428A>G` | `c.428A>G` | all outputs |
+| parentheses around predicted protein changes dropped | `p.(Lys143Arg)` | `p.Lys143Arg` | report lines, amino acid output |
+| synonymous change repeats the reference residue instead of using `=` | `p.Asp164=` | `p.Asp164Asp`, `D164D` | report lines, amino acid output |
+| `c.`/`p.` coordinate prefix dropped | `c.428A>G`, `p.Lys143Arg` | `428A>G`, `K143R` | nucleotide and amino acid outputs |
+
 ```bash
 theiagene report_variants \
   --vep_tsv variants.vep.tsv \
@@ -117,7 +137,9 @@ theiagene report_variants \
   --reference_gff reference.gff \
   --vcf sample.vcf \
   --suppress synonymous_variant \
-  --output VARIANT_REPORT.txt
+  --output VARIANT_REPORT.txt \
+  --nucleotide_output NUCLEOTIDE_CHANGES.txt \
+  --amino_acid_output AMINO_ACID_CHANGES.txt
 ```
 
 ## Library

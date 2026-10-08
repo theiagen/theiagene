@@ -19,6 +19,16 @@ the variant's per-allele read depths, e.g.::
 
     ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg; T:0 C:562)
 
+The reported variants' abbreviated nucleotide (``428A>G``) and amino acid
+(``K143R``) changes are also written, independently of each other, to
+``--nucleotide_output`` and ``--amino_acid_output`` when given.
+
+The reported strings deviate from HGVS in that they drop the reference sequence
+identifier, the parentheses around predicted protein changes and, in the
+abbreviated outputs, the ``c.``/``p.`` prefix, and they spell a synonymous
+change ``p.Asp164Asp`` rather than ``p.Asp164=`` (see :func:`_hgvs_suffix`,
+:func:`_expand_synonymous` and :func:`_abbreviate`).
+
 Rows carrying neither an HGVSc nor an HGVSp string are ignored for now."""
 
 import re
@@ -202,6 +212,9 @@ def _expand_synonymous(suffix: str) -> str:
     """Rewrite a synonymous HGVS protein change into its expanded form
     (``p.Asp164=`` -> ``p.Asp164Asp``).
 
+    The expanded form is a deviation from HGVS, which writes a synonymous change
+    only with '=' and does not endorse repeating the residue.
+
     A change naming no single reference residue -- ``p.=`` (whole protein
     unchanged) or a range such as ``p.Asp164_Leu166=`` -- has nothing
     unambiguous to repeat, so it is returned untouched. Anything that is not a
@@ -215,7 +228,9 @@ def _expand_synonymous(suffix: str) -> str:
 
 def _hgvs_suffix(value: str, strip_parens: bool = False):
     """Return the portion of an HGVS string after the ``transcript:`` /
-    ``protein:`` prefix, or None when the column is undefined.
+    ``protein:`` prefix, or None when the column is undefined. Dropping that
+    reference sequence identifier deviates from HGVS, which requires it; the
+    report's gene label stands in for it.
 
     VEP percent-encodes the characters that are reserved in a VCF INFO field
     (``=``, ``;``, ``,``, ``&``, ``%``) even in its ``--tab`` output, so the
@@ -224,13 +239,45 @@ def _hgvs_suffix(value: str, strip_parens: bool = False):
     residue (see :func:`_expand_synonymous`).
 
     ``strip_parens`` drops the parentheses VEP wraps predicted protein changes in
-    (``p.(Lys143Arg)`` -> ``p.Lys143Arg``)."""
+    (``p.(Lys143Arg)`` -> ``p.Lys143Arg``), deviating from HGVS, which uses them
+    to mark a change as predicted rather than experimentally observed."""
     if value in _UNDEFINED:
         return None
     suffix = unquote(value.split(":", 1)[1] if ":" in value else value)
     if strip_parens:
         suffix = suffix.replace("(", "").replace(")", "")
     return _expand_synonymous(suffix)
+
+
+# HGVS three-letter amino acid codes -> their one-letter abbreviations
+_AA_CODES = {
+    "Ala": "A", "Arg": "R", "Asn": "N", "Asp": "D", "Cys": "C",
+    "Gln": "Q", "Glu": "E", "Gly": "G", "His": "H", "Ile": "I",
+    "Leu": "L", "Lys": "K", "Met": "M", "Phe": "F", "Pro": "P",
+    "Ser": "S", "Thr": "T", "Trp": "W", "Tyr": "Y", "Val": "V",
+    "Sec": "U", "Pyl": "O", "Xaa": "X", "Ter": "*",
+}
+_THREE_LETTER = re.compile("|".join(_AA_CODES))
+
+
+def _abbreviate(suffix: str) -> str:
+    """Collapse an HGVS suffix from :func:`_hgvs_suffix` into its abbreviated,
+    prefix-free form.
+
+    Every change is stripped of its ``c.``/``p.`` prefix; a nucleotide change
+    otherwise keeps its HGVS form (``c.428A>G`` -> ``428A>G``, ``c.*32G>A`` ->
+    ``*32G>A``, ``c.123_125del`` -> ``123_125del``), while a protein change has
+    its three-letter residues replaced by one-letter codes (``p.Lys143Arg`` ->
+    ``K143R``, ``p.Lys143ArgfsTer5`` -> ``K143Rfs*5``).
+
+    HGVS permits one-letter codes and ``*`` for a stop codon, but always carries
+    the ``c.``/``p.`` prefix, so dropping it is a deviation from HGVS. A
+    synonymous change arrives already expanded (``D164D``; see
+    :func:`_expand_synonymous`)."""
+    body = suffix.split(".", 1)[-1]
+    if suffix.startswith("p."):
+        return _THREE_LETTER.sub(lambda match: _AA_CODES[match.group()], body)
+    return body
 
 
 def report_line(row: dict, product: str, depth_index: dict = None, label: str = None) -> str:
@@ -271,8 +318,9 @@ def report_variants(
     depth_index: dict = None,
     query_list: list = None,
     exact_match: bool = False,
-) -> list:
-    """Turn a VEP TSV into query-labelled report lines.
+) -> tuple:
+    """Turn a VEP TSV into query-labelled report lines, plus the abbreviated
+    nucleotide and amino acid changes of the kept rows.
 
     A row is dropped when any of its consequence terms is suppressed, when it
     carries neither an HGVSc nor an HGVSp string, or when its ``Feature`` cannot
@@ -280,8 +328,13 @@ def report_variants(
     ``query_list`` term that matched the row's feature, falling back to the
     product-derived label when no query matched. When ``depth_index`` is given
     (see :func:`build_depth_index`), each kept line carries the variant's
-    per-allele read depths."""
-    lines = []
+    per-allele read depths.
+
+    Returns ``(lines, nucleotide_changes, amino_acid_changes)``; each kept row
+    contributes its abbreviated HGVSc (e.g. ``428A>G``) and HGVSp (e.g.
+    ``K143R``) to the latter two lists independently, so a row lacking one of
+    the two strings is absent from that list only (see :func:`_abbreviate`)."""
+    lines, nucleotide_changes, amino_acid_changes = [], [], []
     for row in parse_vep_tsv(vep_tsv):
         if any(consequence in suppress for consequence in _consequences(row)):
             continue
@@ -304,7 +357,13 @@ def report_variants(
                 f"{row.get('Uploaded_variation')} by its product instead"
             )
         lines.append(report_line(row, product, depth_index, label))
-    return lines
+        for changes, hgvs in (
+            (nucleotide_changes, _hgvs_suffix(row.get("HGVSc"))),
+            (amino_acid_changes, _hgvs_suffix(row.get("HGVSp"), strip_parens=True)),
+        ):
+            if hgvs:
+                changes.append(_abbreviate(hgvs))
+    return lines, nucleotide_changes, amino_acid_changes
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -349,7 +408,24 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "--output",
         help="write report lines here instead of stdout",
     )
+    parser.add_argument(
+        "--nucleotide_output",
+        help="write the reported variants' abbreviated nucleotide changes "
+        "(e.g. '428A>G') here, one per line",
+    )
+    parser.add_argument(
+        "--amino_acid_output",
+        help="write the reported variants' abbreviated amino acid changes "
+        "(e.g. 'K143R') here, one per line",
+    )
     return parser
+
+
+def _write_lines(lines: list, path: str):
+    """Write ``lines`` newline-terminated to ``path``"""
+    with open(path, "w") as handle:
+        handle.write("\n".join(lines) + ("\n" if lines else ""))
+    logger.debug(f"Wrote {len(lines)} line(s) to {path}")
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -368,7 +444,7 @@ def run_cli(args: argparse.Namespace) -> int:
     else:
         query_list = []
 
-    lines = report_variants(
+    lines, nucleotide_changes, amino_acid_changes = report_variants(
         args.vep_tsv,
         features,
         suppress,
@@ -380,13 +456,15 @@ def run_cli(args: argparse.Namespace) -> int:
     )
 
     if args.output:
-        with open(args.output, "w") as handle:
-            handle.write("\n".join(lines) + ("\n" if lines else ""))
-        logger.debug(f"Wrote {len(lines)} variant report line(s) to {args.output}")
+        _write_lines(lines, args.output)
     else:
         for line in lines:
             print(line)
         logger.debug(f"Reported {len(lines)} variant(s)")
+    if args.nucleotide_output:
+        _write_lines(nucleotide_changes, args.nucleotide_output)
+    if args.amino_acid_output:
+        _write_lines(amino_acid_changes, args.amino_acid_output)
 
     return 0
 

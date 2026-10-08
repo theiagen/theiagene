@@ -183,6 +183,27 @@ def test_expand_synonymous(suffix, expected):
     assert rv._expand_synonymous(suffix) == expected
 
 
+@pytest.mark.parametrize(
+    "suffix,expected",
+    [
+        ("p.Lys143Arg", "K143R"),
+        ("p.Arg13545Ser", "R13545S"),
+        ("p.Asp164Asp", "D164D"),
+        ("p.Lys143Ter", "K143*"),
+        ("p.Lys143ArgfsTer5", "K143Rfs*5"),
+        ("p.Lys143_Ala145del", "K143_A145del"),
+        ("c.428A>G", "428A>G"),
+        ("c.100+5G>T", "100+5G>T"),
+        ("c.-14G>C", "-14G>C"),
+        ("c.*32G>A", "*32G>A"),
+        ("c.123_125del", "123_125del"),
+        ("c.123dup", "123dup"),
+    ],
+)
+def test_abbreviate(suffix, expected):
+    assert rv._abbreviate(suffix) == expected
+
+
 def test_report_line_omits_depths_when_variant_absent(vcf):
     index = rv.build_depth_index(vcf)
     row = {
@@ -234,7 +255,7 @@ def annotations(tmp_path):
 def test_report_variants_labels_lines_by_query_gene(annotations):
     gff, tsv = annotations
     features = assimilate_gff(gff)
-    lines = rv.report_variants(
+    lines, _, _ = rv.report_variants(
         tsv, features, set(), "CDS", ["product"], query_list=["FKS1"]
     )
     assert lines == [
@@ -243,11 +264,29 @@ def test_report_variants_labels_lines_by_query_gene(annotations):
     ]
 
 
+def test_report_variants_abbreviates_changes_independently(tmp_path):
+    gff = tmp_path / "reference.gff"
+    gff.write_text(_GFF)
+    tsv = tmp_path / "annotations.tsv"
+    # the second row has no protein change, so it lands in the nucleotide list only
+    tsv.write_text(
+        _VEP_TSV + "chr1_200_G/A\tchr1:200\tA\tsplice_region_variant\trna-x\t"
+        "rna-x:c.100+5G>A\t-\n"
+    )
+    features = assimilate_gff(str(gff))
+    lines, nucleotide, amino_acid = rv.report_variants(
+        str(tsv), features, set(), "CDS", ["product"]
+    )
+    assert len(lines) == 2
+    assert nucleotide == ["492C>T", "100+5G>A"]
+    assert amino_acid == ["D164D"]
+
+
 def test_report_variants_falls_back_to_product_label(annotations):
     gff, tsv = annotations
     features = assimilate_gff(gff)
     # no query matches this feature, so the product names the line instead
-    lines = rv.report_variants(
+    lines, _, _ = rv.report_variants(
         tsv, features, set(), "CDS", ["product"], query_list=["ERG11"]
     )
     assert lines == [
@@ -269,7 +308,7 @@ def test_report_variants_drops_row_whose_hgvs_columns_are_absent(tmp_path):
         "chr1_100_T/C\tchr1:100\tC\tmissense_variant\trna-x\n"
     )
     features = assimilate_gff(str(gff))
-    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == []
+    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == ([], [], [])
 
 
 def test_report_variants_drops_row_truncated_before_its_hgvs_columns(tmp_path):
@@ -283,14 +322,14 @@ def test_report_variants_drops_row_truncated_before_its_hgvs_columns(tmp_path):
         "chr1_100_T/C\tC\tmissense_variant\trna-x\n"
     )
     features = assimilate_gff(str(gff))
-    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == []
+    assert rv.report_variants(str(tsv), features, set(), "CDS", ["product"]) == ([], [], [])
 
 
 def test_report_variants_exact_match_rejects_substring_query(annotations):
     gff, tsv = annotations
     features = assimilate_gff(gff)
     # 'FKS1' is only a substring of the product/gene id, so --exact_match drops it
-    lines = rv.report_variants(
+    lines, _, _ = rv.report_variants(
         tsv, features, set(), "CDS", ["product"], query_list=["FKS1"], exact_match=True
     )
     assert lines[0].startswith("1.3-beta-glucan.synthase.component.FKS1: ")
