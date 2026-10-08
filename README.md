@@ -21,6 +21,32 @@ pip install -e '.[test]'
 
 ## Usage
 
+### Query and coordinate sources
+
+Query and coordinate arguments are handled hierarchically:
+
+| given | query source | coordinate source |
+| --- | --- | --- |
+| `--query_genes` + `--reference_gff` | query terms | GFF |
+| `--query_genes` + `--reference_gff` + `--bedfile` | query terms | GFF — BED is ignored |
+| `--query_genes` + `--bedfile` | query terms | corresponding BED coordinate columns |
+| `--reference_gff` + `--bedfile` | BED name column | GFF |
+| `--bedfile` alone | BED name column | BED coordinate columns |
+
+A GFF is the preferred query coordinate source, and `--query_genes` is the preferred
+query name source — a BED steps in for whichever may be missing. At least one
+coordinate source and one query source is required (`--bedfile` alone satisfies
+both); `report_variants` _requires_ a GFF, so its `--bedfile` only
+ever supplies names.
+
+GFF query matching is case-insensitive and accommodates substrings (unless
+`--exact_match` is specified), whereas BED rows are selected by an exact, 
+case-sensitive match on the name column. `--query_genes erg11` therefore 
+finds `ERG11` in a GFF but not in a BED.
+
+
+### Subcommands
+
 ```bash
 theiagene --help
 theiagene gene_coverage --help
@@ -28,10 +54,10 @@ theiagene extract_variants --help
 theiagene report_variants --help
 ```
 
-### gene_coverage
+#### gene_coverage
 
 Report average depth, percent coverage, mapped reads, and quantified length per
-query gene. Coordinates come from a reference GFF or a BED file; outputs are
+query gene, over the coordinates resolved as described above; outputs are
 written to the working directory as `DEPTH_DICT.json`, `COVERAGE_DICT.json`,
 `READS_DICT.json`, `READS_PASS_DICT.json`, `LENGTHS_DICT.json` and
 `COVERAGE_STATS.tsv`. A gene whose mapped reads fall below `--min_reads_mapped`
@@ -46,6 +72,15 @@ contigs reports their combined length.
 
 A query gene that resolves to no coordinates in the annotation is reported as
 `NA` in all five outputs.
+
+Each measurement is also summarized across genes into a single-value file:
+`MEAN_DEPTH`, `MEAN_COVERAGE`, `MEAN_READS`, `TOTAL_DEPTH`, `TOTAL_COVERAGE` and
+`TOTAL_READS`. Depth and breadth are per-base quantities, so their means weight
+each gene by its quantified length — the mean over every quantified base rather
+than the mean of per-gene values; reads are counted per gene, so their mean
+counts each gene once. A gene reported as `NA` was never measured, so it enters
+neither the mean nor the total; when nothing was measured at all, both files are
+blank rather than `0`.
 
 | filter | effect |
 | --- | --- |
@@ -62,32 +97,39 @@ theiagene gene_coverage \
 theiagene gene_coverage \
   --bam sample.sorted.bam \
   --reference_gff reference.gff \
-  --query_genes FKS1 ERG11
+  --query_genes FKS1,ERG11
 ```
 
-### extract_variants
+#### extract_variants
 
 Write a sub-VCF containing only the variants that overlap the `feature_type`
-(CDS by default) segments of the query genes. Coordinates come from a reference
-GFF or a BED file; each kept record is annotated with the query that retrieved it
+(CDS by default) segments of the query genes, over the coordinates resolved as
+described above. Each kept record is annotated with the query that retrieved it
 in a `GENE` INFO field. Output defaults to `EXTRACTED_VARIANTS.vcf`.
 
 ```bash
 theiagene extract_variants \
   --vcf sample.vcf \
   --reference_gff reference.gff \
-  --query_genes FKS1 ERG11
+  --query_genes FKS1,ERG11
 
 theiagene extract_variants \
   --vcf sample.vcf \
   --bedfile regions.bed
 ```
 
-### report_variants
+#### report_variants
 
+<<<<<<< HEAD
 Render a VEP `--tab` output TSV into a gene-labelled report TSV. Rows with a
 suppressed consequence, no HGVSc/HGVSp string, or a feature that resolves to no
 CDS product are dropped. Each remaining row becomes one record:
+=======
+Render a VEP `--tab` output TSV into gene-labelled report lines. Each kept row
+becomes a gene label, the quoted CDS product resolved through the reference GFF,
+and the consequence with the transcript/protein prefixes stripped from its HGVS
+strings, e.g.:
+>>>>>>> origin/main
 
 | column | content | example |
 | --- | --- | --- |
@@ -98,6 +140,7 @@ CDS product are dropped. Each remaining row becomes one record:
 | `AA` | abbreviated amino acid change: one-letter residue codes | `K143R`, `K143Rfs*5` |
 | `REPORT` | formatted report line (see below) | `ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)` |
 
+<<<<<<< HEAD
 The header line is `#`-prefixed (`#GENE  HGVSc  HGVSp  NT  AA  REPORT`), and a
 field the row has no HGVS string for is `NA`. The TSV prints to stdout unless
 `--output` is given.
@@ -109,6 +152,29 @@ the `--bedfile` name column) matching the row's feature — the name that was
 asked about rather than the full product it resolved to. With no query list, or
 when none of its terms match, the label falls back to the normalized product
 name (`lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
+=======
+A row is tied back to the annotation by its `Location` rather than by its
+`Feature` column: the identifier VEP writes there is whichever attribute its own
+GFF parser read off the transcript (`ID`, `Name`, `transcript_id`), which varies
+by annotation source and need not be the `ID` this package keys features on. The
+variant's coordinates select every overlapping annotation unit — the transcripts
+where the annotation has them, else genes, else bare CDS records — and `Feature`
+is consulted only to choose between several units overlapping one variant, since
+VEP emits a separate row per transcript and each row's HGVS strings belong to
+exactly one of them.
+
+A row is dropped when its consequence is suppressed, when it carries neither an
+HGVSc nor an HGVSp string, when its `Location` does not parse, or when that
+location resolves to no CDS product — because nothing overlaps it, because
+several units do and none answers to the row's `Feature`, or because the
+resolved unit carries no `--feature_qualifier` attribute.
+
+The label is the `--query_genes` term (or, failing that, the `--bedfile` name column)
+matching the row's feature — the name that was asked about rather than the full
+product it resolved to. With no query list, or when none of its terms match, the
+label falls back to the normalized product name
+(`lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
+>>>>>>> origin/main
 The product is quoted so a name carrying commas survives being joined into a
 comma-delimited report. When the source VCF is passed via `--vcf`, the report
 line also carries the variant's per-allele read depths (e.g. `; T:0 C:562`).

@@ -2,9 +2,9 @@
 
 Given a VEP ``--tab`` output TSV and the reference GFF used to produce it, this
 command keeps the rows whose ``Consequence`` is not suppressed, resolves each
-row's ``Feature`` (an RNA) back to its CDS product name through the GFF feature
-hierarchy, and replaces the transcript/protein prefixes of the HGVSc/HGVSp
-strings with a single leading gene label, e.g.::
+row's ``Location`` back to a CDS product name through the GFF feature hierarchy,
+and replaces the transcript/protein prefixes of the HGVSc/HGVSp strings with a
+single leading gene label, e.g.::
 
     ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)
 
@@ -13,6 +13,12 @@ name the caller asked about, not the full product it resolved to -- and the
 product follows in quotes so a name carrying commas survives being joined into
 a comma-delimited report. Without ``--query_genes`` (or when none match) the
 label falls back to the normalized product name.
+
+A row is tied back to the annotation by its ``Location`` rather than by its
+``Feature`` column: the identifier VEP writes there is whichever attribute its
+own GFF parser read off the transcript, which varies by annotation source and
+need not be the ``ID`` this package keys features on. ``Feature`` is consulted
+only to break a tie between several annotation units overlapping one variant.
 
 When the source VCF is supplied via ``--vcf``, each line also carries
 the variant's per-allele read depths, e.g.::
@@ -49,6 +55,7 @@ from theiagene.lib.query import (
     ordered_query_genes,
     extract_queries_from_bed,
     feature_identifiers,
+    iter_descendants,
     match_query,
     normalize_name,
     split_qualifiers,
@@ -64,6 +71,10 @@ logger = logging.getLogger(__name__)
 # rather than as a value, which would otherwise let a row carrying no HGVS
 # string at all past the filter in `report_variants`.
 _UNDEFINED = {"-", "", ".", None}
+
+# the attribute keys VEP's `Feature` column can be drawn from; which one its GFF
+# parser lands on varies by annotation source, so each is tried in turn
+_UNIT_ID_KEYS = ("ID", "Name", "transcript_id")
 
 
 def parse_vep_tsv(vep_tsv: str):
@@ -176,18 +187,29 @@ def _consequences(row: dict) -> list:
     return raw.replace("&", ",").replace(" ", "").split(",") if raw else []
 
 
-def _cds_product(feature, feature_type: str, qualifiers: list):
-    """Resolve a VEP ``Feature`` (an RNA) to the ``feature_qualifier`` value on
-    one of its ``feature_type`` (CDS) descendants.
+def _type_qualifier(feature, feature_type: str, qualifiers: list):
+    """Resolve an annotation unit to the ``feature_qualifier`` value carried by
+    one of its ``feature_type`` (CDS) records.
+
+    The unit is whichever level the annotation resolved the variant to -- an RNA,
+    a gene, or a bare ``feature_type`` record -- so the search covers the unit
+    itself and every descendant beneath it at any depth: the unit itself so a
+    bare CDS carrying no gene parent resolves its own product, and the recursive
+    walk so a gene sitting over gene -> RNA -> CDS still reaches the CDS. This is
+    the same set of subfeatures :func:`theiagene.lib.query._grouped_query_ranges`
+    reads coordinates from, so the report and the extraction resolve a unit
+    through one walk.
 
     The attribute key is matched case-insensitively; the first matching value on
-    the first qualifying descendant wins. Returns None if the feature is None or
-    carries no such descendant/qualifier."""
+    the first qualifying record wins. Returns None if the feature is None or
+    carries no such record/qualifier."""
     if feature is None:
         return None
     wanted = {qualifier.lower() for qualifier in qualifiers}
-    # only the requested-type subfeatures beneath this RNA (e.g. CDS)
-    for subfeature in FeatureCol(feature.descendants, group=False)[feature_type]:
+    # the requested-type records at or beneath this unit (e.g. CDS); the class
+    # filter drops the unit itself unless it is already of that type
+    subfeatures = FeatureCol([feature] + list(iter_descendants(feature)), group=False)
+    for subfeature in subfeatures[feature_type]:
         for key, value in subfeature.attributes.items():
             if value and key.lower() in wanted:
                 return value
@@ -344,19 +366,33 @@ def report_variants(
         # nothing to translate without at least one HGVS string
         if row.get("HGVSc") in _UNDEFINED and row.get("HGVSp") in _UNDEFINED:
             continue
-        feature_id = row.get("Feature")
-        feature = features.get(feature_id)
-        product = _cds_product(feature, feature_type, qualifiers)
-        if product is None:
+        # the variant is placed by coordinate rather than by the row's `Feature`,
+        # whose spelling depends on which attribute VEP's GFF parser read
+        location = _extract_location(row)
+        if location is None:
+            logger.warning(f"cannot resolve location {row.get('Location')}; "
+                           f"skipping variant {row.get('Uploaded_variation')}")
+            continue
+        seqid, start, end = location
+        hits = features.index(seqid, start, end)
+        # `index` returns every overlapping record regardless of class, so units
+        # are taken from one level: the transcripts VEP itself annotates against,
+        # else the genes of an annotation carrying no transcript level (gene ->
+        # CDS), else bare feature_type records owning no gene at all. Taking one
+        # level keeps a locus from counting once per tier of its own hierarchy
+        units = hits.rnas or hits.genes or hits[feature_type]
+        feature = _select_unit(units, row.get("Feature"))
+        qualifier_hit = _type_qualifier(feature, feature_type, qualifiers)
+        if qualifier_hit is None:
             logger.warning(
                 f"no {feature_type} {qualifiers} qualifier resolved for feature "
-                f"{feature_id!r}; skipping variant {row.get('Uploaded_variation')}"
+                f"{row.get('Location')}; skipping variant {row.get('Uploaded_variation')}"
             )
             continue
         label = _query_label(feature, query_list, qualifiers, exact_match)
         if query_list and label is None:
             logger.warning(
-                f"no query gene matched feature {feature_id!r}; labelling variant "
+                f"no query gene matched feature {row.get('Location')}; labelling variant "
                 f"{row.get('Uploaded_variation')} by its product instead"
             )
         label = label or normalize_name(product)
@@ -380,10 +416,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--reference_gff", required=True)
     parser.add_argument(
         "--query_genes",
-        nargs="+",
-        help="comma-/space-delimited query gene name(s); each report line is "
-        "labelled by the query term matching its feature rather than by the "
-        "resolved CDS product",
+        help="comma-delimited query gene name(s)"
     )
     parser.add_argument(
         "--bedfile",
@@ -403,13 +436,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--suppress",
-        help="comma-/space-delimited consequence type(s) whose rows are dropped",
+        help="comma-delimited consequence type(s) whose rows are dropped",
     )
     parser.add_argument(
         "--feature_qualifier",
         default="product",
-        help="attribute key(s), matched case-insensitively, read off the CDS "
-        "descendant(s) to name the product",
+        help="comma-delimited attribute key(s), matched case-insensitively, read "
+        "off the CDS descendant(s) to name the product",
     )
     parser.add_argument("--feature_type", default="CDS")
     parser.add_argument(

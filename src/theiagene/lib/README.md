@@ -169,6 +169,25 @@ canonical class, and a `fid → Feature` index is built.
   (descendants reachable only via `.descendants` are not).
 - **`get(fid, default=None) -> Feature | default`** — non-raising counterpart
   of `by_id`.
+- **`by_seqid(seqid) -> FeatureCol`** — a new `FeatureCol` of the features on
+  contig `seqid`, in this collection's order (empty when the contig carries
+  none). Built with `group=False`, so each feature keeps its existing
+  `parent`/`descendants` wiring. Only features in `self.features` are filed
+  under a contig (descendants reachable only via `.descendants` are not, as
+  with `by_id`) — a caveat that carries over to `index`.
+- **`index(seqid, start, end=None) -> FeatureCol`** — a new `FeatureCol` of the
+  features on contig `seqid` overlapping `[start, end)`, 0-based and half-open
+  as `Feature` coordinates are. **`seqid` comes first**; `end` defaults to
+  `start + 1`, so a bare `index(seqid, pos)` queries that single position, and
+  an `end` at or below `start` raises `ValueError` rather than returning an
+  empty collection. Every overlapping feature is returned *regardless of class*
+  — a coding position matches its CDS and the RNA and gene containing it —
+  because which level answers a positional question is the caller's to decide;
+  narrow with the class keys, e.g. `col.index("chr1", pos)["CDS"]`, or take a
+  single tier (`hits.rnas or hits.genes or hits["CDS"]`) so one locus is not
+  counted once per level of its own hierarchy. A `seqid` absent from the
+  collection yields an empty `FeatureCol`, so a mistyped or misplaced argument
+  reads as "nothing overlaps" rather than raising.
 - **`sort() -> FeatureCol`** — order features by contig (`seqid`), then
   parent-before-descendant, then `start`; sorts every `descendants` list in
   place so this walk and `Feature.to_gff` share one sibling order. Undefined
