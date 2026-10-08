@@ -16,17 +16,6 @@ This PR closes #
 
 ## :hammer_and_wrench: Technical
 
-### Impacted areas
-<!-- Check every area this PR touches -->
-
-- [ ] `gene_coverage.py`
-- [ ] `extract_variants.py`
-- [ ] `report_variants.py`
-- [ ] `lib/` — feature, parsers, query, logging
-- [ ] `cli.py` / `__main__.py`
-- [ ] Packaging / infra — `pyproject.toml`, `Dockerfile`, `.github/`
-- [ ] Docs — `README.md`, `src/theiagene/lib/README.md`
-
 ### Changes
 <!-- Describe your changes. Bullets are fine. Call out anything a reviewer would
      otherwise have to reverse-engineer from the diff. -->
@@ -69,7 +58,6 @@ This PR is backwards incompatible (CLI arguments, output files, or library API):
 ## :microscope: Final Developer Checklist
 
 - [ ] The change has been run and the outputs are as anticipated
-- [ ] All verification boxes above are checked or explicitly marked N/A
 - [ ] No credentials or non-public sample data were committed (including in test fixtures)
 - [ ] `README.md` has been updated for any user-facing change (new subcommands, arguments, or output formats)
 - [ ] All CI checks are passing
@@ -80,6 +68,5 @@ This PR is backwards incompatible (CLI arguments, output files, or library API):
 - [ ] The change does what the summary claims and the approach is sound
 - [ ] Test coverage is adequate for the change
 - [ ] Confirmed that changes work as expected with existing workflows
-- [ ] You have pulled the branch and verified the changes appropriately
 - [ ] Documentation is accurate
 - [ ] The PR author has addressed all comments
