@@ -332,6 +332,64 @@ def report_line(row: dict, product: str, depth_index: dict = None, label: str = 
     return f'{label}: "{product}" ({body})'
 
 
+def _extract_location(row: dict):
+    """Parse VEP's ``Location`` into ``(contig, start, end)``, 0-based half-open.
+
+    VEP writes ``contig:pos`` for a substitution, ``contig:start-end`` for a
+    deletion, and ``contig:start-end`` with start > end for an insertion (the
+    zero-length span between two bases). Coordinates are 1-based and inclusive,
+    so only the start shifts; sorting the pair turns an insertion into the
+    two-base window it sits between, which is what an overlap test needs. The
+    contig is split from the right so a name containing ':' survives.
+
+    None is returned for a ``Location`` that is undefined, absent from the TSV
+    entirely, or unparseable, leaving the caller to skip the row rather than
+    resolve it against a bogus coordinate."""
+    raw = row.get("Location")
+    if raw in _UNDEFINED:
+        return None
+    contig, sep, span = raw.rpartition(":")
+    if not sep or not contig:
+        return None
+    low, _, high = span.partition("-")
+    try:
+        low = int(low)
+        # a bare position names a single base, so both ends come from it
+        high = int(high) if high else low
+    except ValueError:
+        return None
+    return contig, min(low, high) - 1, max(low, high)
+
+
+def _select_unit(units: list, vep_feature: str):
+    """Pick the single annotation unit a VEP row is about, or None.
+
+    A row's HGVS strings are computed against exactly one transcript, and VEP has
+    already emitted a separate row per transcript, so a row must resolve to one
+    unit rather than fan out over every unit the variant overlaps. A sole
+    overlapping unit is taken as-is -- the coordinate has already done the work
+    and there is nothing to disambiguate. Only where several overlap does the
+    row's ``Feature`` break the tie, compared against the unit's own identifiers
+    (never its parent's or its CDS product's, which sibling transcripts of one
+    gene share and which would therefore match both).
+
+    None is returned when nothing overlapped, when an ambiguous overlap carries
+    no ``Feature`` to arbitrate it, and when none of the units answer to the one
+    it carries -- all of which leave the caller to skip the row rather than
+    attribute it to whichever unit happened to sort first."""
+    if len(units) < 2:
+        return units[0] if units else None
+    if vep_feature in _UNDEFINED:
+        return None
+    for unit in units:
+        # `fid` alongside the attributes: group_features may have renamed a
+        # colliding ID, leaving the one VEP saw only in `attributes`
+        identifiers = [unit.fid] + [unit.attributes.get(key) for key in _UNIT_ID_KEYS]
+        if any(identifier == vep_feature for identifier in identifiers):
+            return unit
+    return None
+
+
 # report TSV columns: the gene label, VEP's HGVS strings, their abbreviations
 # and the formatted report line
 COLUMNS = ("GENE", "HGVSc", "HGVSp", "NT", "AA", "REPORT")
@@ -351,10 +409,14 @@ def report_variants(
     whose fields follow :data:`COLUMNS`.
 
     A row is dropped when any of its consequence terms is suppressed, when it
-    carries neither an HGVSc nor an HGVSp string, or when its ``Feature`` cannot
-    be resolved to a CDS product in ``features``. Each kept record is labelled
-    with the ``query_list`` term that matched the row's feature, falling back to
-    the product-derived label when no query matched. The HGVSc/HGVSp fields are
+    carries neither an HGVSc nor an HGVSp string, when its ``Location`` does not
+    parse, or when that location cannot be resolved to a CDS product in
+    ``features`` -- either because no annotation unit overlaps it, because
+    several do and none answers to the row's ``Feature`` (see
+    :func:`_select_unit`), or because the resolved unit carries no qualifier.
+    Each kept record is labelled with the ``query_list`` term that matched the
+    row's unit, falling back to the product-derived label when no query matched.
+    The HGVSc/HGVSp fields are
     VEP's strings, percent-decoded but otherwise untouched, and NT/AA are their
     abbreviations (see :func:`_abbreviate`); a field the row has no HGVS string
     for is ``NA``. When ``depth_index`` is given (see :func:`build_depth_index`),
@@ -395,7 +457,7 @@ def report_variants(
                 f"no query gene matched feature {row.get('Location')}; labelling variant "
                 f"{row.get('Uploaded_variation')} by its product instead"
             )
-        label = label or normalize_name(product)
+        label = label or normalize_name(qualifier_hit)
         hgvsc, hgvsp = row.get("HGVSc"), row.get("HGVSp")
         nt = _hgvs_suffix(hgvsc)
         aa = _hgvs_suffix(hgvsp, strip_parens=True)
@@ -405,7 +467,7 @@ def report_variants(
             unquote(hgvsp) if aa else "NA",
             _abbreviate(nt) if nt else "NA",
             _abbreviate(aa) if aa else "NA",
-            report_line(row, product, depth_index, label),
+            report_line(row, qualifier_hit, depth_index, label),
         ])
     return records
 

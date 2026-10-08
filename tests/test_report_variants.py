@@ -350,10 +350,7 @@ def test_report_variants_exact_match_rejects_substring_query(annotations):
     records = rv.report_variants(
         tsv, features, set(), "CDS", ["product"], query_list=["FKS1"], exact_match=True
     )
-<<<<<<< HEAD
     assert records[0][-1].startswith("1.3-beta-glucan.synthase.component.FKS1: ")
-=======
-    assert lines[0].startswith("1.3-beta-glucan.synthase.component.FKS1: ")
 
 
 # --------------------------------------------------------------------------- #
@@ -382,7 +379,7 @@ _OVERLAP_GFF = "\n".join(
 @pytest.fixture
 def overlapping(tmp_path):
     """Report the one variant over the overlapping locus, under a given VEP
-    ``Feature`` value."""
+    ``Feature`` value, returning each record's REPORT column."""
     gff = tmp_path / "overlap.gff"
     gff.write_text(_OVERLAP_GFF)
 
@@ -393,9 +390,11 @@ def overlapping(tmp_path):
             f"chr1_100_T/C\tchr1:100\tC\tmissense_variant\t{vep_feature}\t"
             "x:c.428A>G\ty:p.Lys143Arg\n"
         )
-        return rv.report_variants(
+        records = rv.report_variants(
             str(tsv), assimilate_gff(str(gff)), set(), "CDS", list(qualifiers), **kwargs
         )
+        # the REPORT column carries the resolved label and product under test
+        return [record[-1] for record in records]
 
     return _run
 
@@ -442,4 +441,3 @@ def test_report_variants_name_selected_unit_drives_the_query_label(overlapping):
         'ERG11: "lanosterol 14-alpha demethylase" '
         "(missense_variant c.428A>G p.Lys143Arg)"
     ]
->>>>>>> origin/main

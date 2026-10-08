@@ -120,16 +120,8 @@ theiagene extract_variants \
 
 #### report_variants
 
-<<<<<<< HEAD
-Render a VEP `--tab` output TSV into a gene-labelled report TSV. Rows with a
-suppressed consequence, no HGVSc/HGVSp string, or a feature that resolves to no
-CDS product are dropped. Each remaining row becomes one record:
-=======
-Render a VEP `--tab` output TSV into gene-labelled report lines. Each kept row
-becomes a gene label, the quoted CDS product resolved through the reference GFF,
-and the consequence with the transcript/protein prefixes stripped from its HGVS
-strings, e.g.:
->>>>>>> origin/main
+Render a VEP `--tab` output TSV into a gene-labelled report TSV, one record per
+kept row:
 
 | column | content | example |
 | --- | --- | --- |
@@ -140,7 +132,6 @@ strings, e.g.:
 | `AA` | abbreviated amino acid change: one-letter residue codes | `K143R`, `K143Rfs*5` |
 | `REPORT` | formatted report line (see below) | `ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)` |
 
-<<<<<<< HEAD
 The header line is `#`-prefixed (`#GENE  HGVSc  HGVSp  NT  AA  REPORT`), and a
 field the row has no HGVS string for is `NA`. The TSV prints to stdout unless
 `--output` is given.
@@ -152,7 +143,10 @@ the `--bedfile` name column) matching the row's feature — the name that was
 asked about rather than the full product it resolved to. With no query list, or
 when none of its terms match, the label falls back to the normalized product
 name (`lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
-=======
+The product is quoted so a name carrying commas survives being joined into a
+comma-delimited report. When the source VCF is passed via `--vcf`, the report
+line also carries the variant's per-allele read depths (e.g. `; T:0 C:562`).
+
 A row is tied back to the annotation by its `Location` rather than by its
 `Feature` column: the identifier VEP writes there is whichever attribute its own
 GFF parser read off the transcript (`ID`, `Name`, `transcript_id`), which varies
@@ -168,16 +162,6 @@ HGVSc nor an HGVSp string, when its `Location` does not parse, or when that
 location resolves to no CDS product — because nothing overlaps it, because
 several units do and none answers to the row's `Feature`, or because the
 resolved unit carries no `--feature_qualifier` attribute.
-
-The label is the `--query_genes` term (or, failing that, the `--bedfile` name column)
-matching the row's feature — the name that was asked about rather than the full
-product it resolved to. With no query list, or when none of its terms match, the
-label falls back to the normalized product name
-(`lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
->>>>>>> origin/main
-The product is quoted so a name carrying commas survives being joined into a
-comma-delimited report. When the source VCF is passed via `--vcf`, the report
-line also carries the variant's per-allele read depths (e.g. `; T:0 C:562`).
 
 #### Deviations from HGVS
 
