@@ -1,0 +1,79 @@
+name: Build & Push Docker Image
+
+# Release-driven image builds. Publishing a GitHub Release tagged `vX.Y.Z`
+# (matching repo history, e.g. v1.0.1) builds the Dockerfile `test` stage
+# (runs pytest), then pushes the `app` stage to Artifact Registry as
+# `theiagene:X.Y.Z` and `theiagene:latest`. Can also be run manually against
+# an existing tag via workflow_dispatch.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build (e.g. v1.0.1)'
+        required: true
+
+env:
+  PROJECT_ID: general-theiagen
+  LOCATION: us
+  REPOSITORY: theiagen
+  IMAGE: theiagene
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Resolve version
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          VERSION="${TAG#v}"
+          PKG_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+          echo "Tag: $TAG | Image version: $VERSION | pyproject.toml: $PKG_VERSION"
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag '$TAG' does not match pyproject.toml version '$PKG_VERSION'. Bump the version and re-tag."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE_URI=${{ env.LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}" >> "$GITHUB_ENV"
+
+      - name: Run tests in Docker test stage
+        run: |
+          docker build \
+            --target test \
+            --build-arg THEIAGENE_VER=${{ env.VERSION }} \
+            .
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIP_PROVIDER }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --target app \
+            --build-arg THEIAGENE_VER=${{ env.VERSION }} \
+            -t ${{ env.IMAGE_URI }}:${{ env.VERSION }} \
+            -t ${{ env.IMAGE_URI }}:latest \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.IMAGE_URI }}:${{ env.VERSION }}
+          docker push ${{ env.IMAGE_URI }}:latest
