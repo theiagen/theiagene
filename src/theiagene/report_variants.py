@@ -36,9 +36,8 @@ changes, and the report line above. A field the row has no HGVS string for is
 
 The HGVSc/HGVSp columns decode VEP's strings (percent-decoded). The NT, AA and REPORT columns deviate from HGVS that
 by dropping the reference sequence identifier and the parentheses around
-predicted protein changes, NT and AA drop the ``c.``/``p.`` prefix, and a
-synonymous change deviates from HGVS by reiterating the redundant AA (e.g ``p.Asp164Asp`` rather than ``p.Asp164=``, see
-:func:`_hgvs_suffix`, :func:`_expand_synonymous` and :func:`_abbreviate`).
+predicted protein changes, and NT and AA drop the ``c.``/``p.`` prefix (see
+:func:`_hgvs_suffix` and :func:`_abbreviate`).
 
 Rows carrying neither an HGVSc nor an HGVSp string are ignored for now."""
 
@@ -229,30 +228,6 @@ def _query_label(feature, query_list: list, qualifiers: list, exact_match: bool)
     return match_query(query_list, feature_identifiers(feature, qualifiers), exact_match)
 
 
-# HGVS writes a synonymous protein change as ``p.Asp164=`` ('=' meaning "residue
-# unchanged"); this captures the prefix, the reference residue (3- or 1-letter
-# code) and its position so the residue can be repeated in place of the '='
-_SYNONYMOUS = re.compile(r"^(p\.)([A-Z][a-z]{2}|[A-Z])(\d+)=$")
-
-
-def _expand_synonymous(suffix: str) -> str:
-    """Rewrite a synonymous HGVS protein change into its expanded form
-    (``p.Asp164=`` -> ``p.Asp164Asp``).
-
-    The expanded form is a deviation from HGVS, which writes a synonymous change
-    only with '='.
-
-    A change naming no single reference residue -- ``p.=`` (whole protein
-    unchanged) or a range such as ``p.Asp164_Leu166=`` -- has nothing
-    unambiguous to repeat, so it is returned untouched. Anything that is not a
-    synonymous change passes through unchanged."""
-    match = _SYNONYMOUS.match(suffix)
-    if not match:
-        return suffix
-    prefix, residue, position = match.groups()
-    return f"{prefix}{residue}{position}{residue}"
-
-
 def _hgvs_suffix(value: str, strip_parens: bool = False):
     """Return the portion of an HGVS string after the ``transcript:`` /
     ``protein:`` prefix, or None when the column is undefined. Dropping this
@@ -261,8 +236,7 @@ def _hgvs_suffix(value: str, strip_parens: bool = False):
     VEP percent-encodes the characters that are reserved in a VCF INFO field
     (``=``, ``;``, ``,``, ``&``, ``%``) even in its ``--tab`` output, so the
     suffix is URL-decoded here -- otherwise a synonymous change arrives as
-    ``p.Asp164%3D``. The decoded ``=`` is then expanded to repeat the reference
-    residue (see :func:`_expand_synonymous`).
+    ``p.Asp164%3D`` rather than ``p.Asp164=``.
 
     ``strip_parens`` drops the parentheses VEP wraps predicted protein changes in
     (``p.(Lys143Arg)`` -> ``p.Lys143Arg``), which deviates from HGVS because
@@ -272,7 +246,7 @@ def _hgvs_suffix(value: str, strip_parens: bool = False):
     suffix = unquote(value.split(":", 1)[1] if ":" in value else value)
     if strip_parens:
         suffix = suffix.replace("(", "").replace(")", "")
-    return _expand_synonymous(suffix)
+    return suffix
 
 
 # HGVS three-letter amino acid codes -> their one-letter abbreviations
@@ -293,9 +267,8 @@ def _abbreviate(suffix: str) -> str:
     Nucleotide changes keep HGVS form (``c.428A>G`` -> ``428A>G``, ``c.*32G>A`` ->
     ``*32G>A``, ``c.123_125del`` -> ``123_125del``), whereas amino acid changes
     have their three-letter residues replaced by one-letter codes
-    (``p.Lys143Arg`` -> ``K143R``, ``p.Lys143ArgfsTer5`` -> ``K143Rfs*5``). Both
-    deviate from HGVS by dropping the prefix; synonymous changes also deviate by
-    explicitly declaring the synonymous residue (``D164D``)."""
+    (``p.Lys143Arg`` -> ``K143R``, ``p.Lys143ArgfsTer5`` -> ``K143Rfs*5``,
+    ``p.Asp164=`` -> ``D164=``). Both deviate from HGVS by dropping the prefix."""
     body = suffix.split(".", 1)[-1]
     if suffix.startswith("p."):
         return _THREE_LETTER.sub(lambda match: _AA_CODES[match.group()], body)
