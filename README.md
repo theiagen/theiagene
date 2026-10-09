@@ -1,7 +1,7 @@
 # theiagene
 
 theiagene is a gene-centric data manipulation toolkit and library. 
-Provides a single `theiagene` command-line entrypoint with four
+This repository provides a single `theiagene` command-line entrypoint with four
 subcommands:
 
 - **`gene_coverage`** — quantify the breadth, depth, and read support of
@@ -60,18 +60,22 @@ theiagene prepare_snpeff --help
 #### gene_coverage
 
 Report average depth, percent coverage, mapped reads, and quantified length per
-query gene, over the coordinates resolved as described above; outputs are
-written to the working directory as `DEPTH_DICT.json`, `COVERAGE_DICT.json`,
-`READS_DICT.json`, `READS_PASS_DICT.json`, `LENGTHS_DICT.json` and
-`COVERAGE_STATS.tsv`. A gene whose mapped reads fall below `--min_reads_mapped`
+query gene, over the coordinates resolved as described above; outputs are written to accommodate WDL:
+
+- `DEPTH_DICT.json`
+- `COVERAGE_DICT.json`
+- `READS_DICT.json`
+- `READS_PASS_DICT.json`
+- `LENGTHS_DICT.json`
+- `COVERAGE_STATS.tsv` 
+
+A gene with reads mapped below `--min_reads_mapped`
 (default 1) is flagged as failing in `READS_PASS_DICT.json`, but keeps its
 measured depth, breadth, and read count.
 
 `LENGTHS_DICT.json` gives the number of reference bases each gene's depth and breadth
-were computed over — the denominator of both ratios. Its bases are counted after
-the gene's ranges are merged, so a base shared by two overlapping segments (e.g.
-isoform CDS) contributes once, and a gene split across several segments or
-contigs reports their combined length.
+were computed over — the denominator of both averages. Its bases are counted after
+the gene's ranges are merged.
 
 A query gene that resolves to no coordinates in the annotation is reported as
 `NA` in all five outputs.
@@ -79,10 +83,9 @@ A query gene that resolves to no coordinates in the annotation is reported as
 Each measurement is also summarized across genes into a single-value file:
 `MEAN_DEPTH`, `MEAN_COVERAGE`, `MEAN_READS`, `TOTAL_DEPTH`, `TOTAL_COVERAGE` and
 `TOTAL_READS`. Depth and breadth are per-base quantities, so their means weight
-each gene by its quantified length — the mean over every quantified base rather
-than the mean of per-gene values; reads are counted per gene, so their mean
-counts each gene once. A gene reported as `NA` was never measured, so it enters
-neither the mean nor the total; when nothing was measured at all, both files are
+each gene by gene length; reads are counted per gene, so their mean
+counts each gene once. A gene reported as `NA` was never measured, so it is disregarded
+from the mean and the total; when nothing was measured at all, both files are
 blank rather than `0`.
 
 | filter | effect |
@@ -105,7 +108,7 @@ theiagene gene_coverage \
 
 #### extract_variants
 
-Write a sub-VCF containing only the variants that overlap the `feature_type`
+Writes a sub-VCF containing only the variants that overlap the `feature_type`
 (CDS by default) segments of the query genes, over the coordinates resolved as
 described above. Each kept record is annotated with the query that retrieved it
 in a `GENE` INFO field. Output defaults to `EXTRACTED_VARIANTS.vcf`.
@@ -124,9 +127,8 @@ theiagene extract_variants \
 #### report_variants
 
 Render a SnpEff-annotated VCF into a gene-labelled report TSV, one record per
-kept `ANN` entry. `--reference_gff` should be the GFF the SnpEff database was
-built from (see [prepare_snpeff](#prepare_snpeff)), so the transcripts SnpEff
-names are the ones resolved here:
+kept `ANN` entry. `--reference_gff` must be the GFF the SnpEff database was
+built from (see [prepare_snpeff](#prepare_snpeff)). A TSV is generated and formatted as follows:
 
 | column | content | example |
 | --- | --- | --- |
@@ -155,9 +157,8 @@ Each report line has the form `label: "product" (consequence HGVS.c HGVS.p; dept
 - **depths**: the read depth for each allele, read off the VCF's sample `AD`
   (else `RO`/`AO`) field; omitted when the record carries neither.
 
-An entry is tied back to the annotation by its variant's coordinates, which
-select every overlapping annotation unit — the transcripts where the annotation
-has them, else genes, else bare CDS records. Its `Feature_ID` is consulted only to
+An entry is tied back to the GFF hiearchically via the variant report's coordinates: the transcripts where the annotation
+has them, else genes, else bare CDS records. A report's `Feature_ID` is consulted only to
 choose between several units overlapping one variant (matched against the unit's
 `ID`, `Name` or `transcript_id`), since SnpEff emits a separate entry per
 transcript and each entry's HGVS strings belong to exactly one of them.
@@ -165,18 +166,14 @@ transcript and each entry's HGVS strings belong to exactly one of them.
 An entry is dropped when any of its consequence terms is suppressed, when it is
 not annotated against a transcript (e.g. `intergenic_region`), when it carries
 neither an HGVS.c nor an HGVS.p string, or when its variant resolves to no CDS
-product — because nothing overlaps it, because several units do and none answers
-to the entry's `Feature_ID`, or because the resolved unit carries no
-`--feature_qualifier` attribute. A transcript SnpEff flags with
+product. A transcript SnpEff flags with
 `WARNING_TRANSCRIPT_NO_START_CODON` or `WARNING_TRANSCRIPT_INCOMPLETE` is treated
 as noncoding, so its protein change is reported as `NA`.
 
 #### Deviations from HGVS
 
-HGVS strings are SnpEff's, so the columns follow the
-[HGVS recommendations](https://hgvs-nomenclature.org/) except where noted below.
-One-letter amino acid codes, `*` for a stop codon, and the short frameshift form
-(`p.Lys128fs`) are permitted by HGVS and are not deviations.
+HGVS strings deviate
+[HGVS recommendations](https://hgvs-nomenclature.org/) noted below:
 
 | deviation | HGVS | reported | applies to |
 | --- | --- | --- | --- |
@@ -246,17 +243,3 @@ The subcommands share a gene/feature data model — the `Feature` and
 navigable gene → RNA → CDS/exon hierarchy. See
 [src/theiagene/lib/README.md](src/theiagene/lib/README.md) for a human-readable
 introduction and full API reference.
-
-Reading references is shared through `theiagene.lib.parsers`:
-
-| function | returns |
-| --- | --- |
-| `assimilate_gff(gff)` | a `FeatureCol` of every GFF3 record, grouped into its hierarchy |
-| `iter_gff_features(gff)` | each GFF3 record as a `Feature`, ungrouped |
-| `iter_gff_lines(gff)` | the raw lines of a GFF3's annotation section |
-| `gff_translation_tables(gff)` | a `{contig: table}` map of the `transl_table` each contig's features declare; raises `ValueError` for a contig declaring more than one |
-| `import_vcf(vcf)` | a `pysam.VariantFile`, with GQ values written in scientific notation scrubbed to integers |
-| `import_bam(bam)` | an indexed `pysam.AlignmentFile` |
-
-A `.gz` GFF3 is read through `gzip`, and every GFF3 reader stops at an embedded
-`##FASTA` directive (in any case, with or without a space after the `##`).
