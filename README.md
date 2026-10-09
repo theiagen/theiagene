@@ -124,7 +124,9 @@ theiagene extract_variants \
 #### report_variants
 
 Render a SnpEff-annotated VCF into a gene-labelled report TSV, one record per
-kept `ANN` entry:
+kept `ANN` entry. `--reference_gff` should be the GFF the SnpEff database was
+built from (see [prepare_snpeff](#prepare_snpeff)), so the transcripts SnpEff
+names are the ones resolved here:
 
 | column | content | example |
 | --- | --- | --- |
@@ -200,22 +202,26 @@ theiagene report_variants \
 
 #### prepare_snpeff
 
-Prepare the inputs for `snpeff build` on a custom genome:
+Write the GFF and config that `snpeff build` needs to build a database for a
+custom genome, `--genome_id`:
 
-- `<data_dir>/<genome_id>/genes.gff`: the reference GFF's annotation section,
-  with any embedded `##FASTA` section dropped (SnpEff reads the sequences from
-  the reference FASTA instead)
-- `--output` (default `snpEff.config`): a copy of `--template_config` with its
-  `data.dir` pointed at `--data_dir`, the genome registered under `--organism`,
-  and its codon table(s) assigned
+| output | content |
+| --- | --- |
+| `<data_dir>/<genome_id>/genes.gff` | the reference GFF's annotation section, without any embedded `##FASTA` section |
+| `--output` (default `snpEff.config`) | a copy of `--template_config` (e.g. the config installed alongside `snpEff.jar`) with `data.dir` pointed at `--data_dir`, the genome registered under `--organism`, and its codon table(s) assigned |
 
-`--translation_table` (an NCBI translation table number) takes precedence and
-applies genome-wide. Without it, each contig is assigned the table its GFF
-features declare in their `transl_table` attribute, and a contig declaring none
-uses SnpEff's default (Standard) table, with a warning when no contig declares
-one. A contig whose features declare more than one table raises an error,
-as does a table SnpEff does not support; either way nothing is written, and the
-table must be given with `--translation_table`.
+SnpEff reads the genome's sequences from `<data_dir>/<genome_id>/sequences.fa`
+rather than the GFF, so the reference FASTA is staged there separately.
+
+Each contig is assigned the codon table its GFF features declare in their
+`transl_table` attribute (an NCBI translation table number), so a nuclear genome
+and its mitochondrion can each carry their own. Features declaring no
+`transl_table` are ignored, and a contig none of whose features declare one
+falls back to SnpEff's default (Standard) table — with a warning when no contig
+declares one at all. `--translation_table` takes precedence over the GFF and
+applies one table genome-wide; it is required when a contig's features declare
+more than one table, which raises an error rather than guessing. An error, or a
+table SnpEff does not support, leaves nothing written.
 
 ```bash
 theiagene prepare_snpeff \
@@ -224,8 +230,13 @@ theiagene prepare_snpeff \
   --data_dir snpeff_data \
   --genome_id cauris \
   --organism "Candidozyma auris"
+zcat -f reference.fasta.gz > snpeff_data/cauris/sequences.fa
 
 snpeff build -c snpEff.config -gff3 cauris
+snpeff ann -c snpEff.config cauris sample.vcf > sample.snpeff.vcf
+theiagene report_variants \
+  --vcf sample.snpeff.vcf \
+  --reference_gff snpeff_data/cauris/genes.gff
 ```
 
 ## Library
@@ -235,3 +246,17 @@ The subcommands share a gene/feature data model — the `Feature` and
 navigable gene → RNA → CDS/exon hierarchy. See
 [src/theiagene/lib/README.md](src/theiagene/lib/README.md) for a human-readable
 introduction and full API reference.
+
+Reading references is shared through `theiagene.lib.parsers`:
+
+| function | returns |
+| --- | --- |
+| `assimilate_gff(gff)` | a `FeatureCol` of every GFF3 record, grouped into its hierarchy |
+| `iter_gff_features(gff)` | each GFF3 record as a `Feature`, ungrouped |
+| `iter_gff_lines(gff)` | the raw lines of a GFF3's annotation section |
+| `gff_translation_tables(gff)` | a `{contig: table}` map of the `transl_table` each contig's features declare; raises `ValueError` for a contig declaring more than one |
+| `import_vcf(vcf)` | a `pysam.VariantFile`, with GQ values written in scientific notation scrubbed to integers |
+| `import_bam(bam)` | an indexed `pysam.AlignmentFile` |
+
+A `.gz` GFF3 is read through `gzip`, and every GFF3 reader stops at an embedded
+`##FASTA` directive (in any case, with or without a space after the `##`).
