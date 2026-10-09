@@ -6,7 +6,7 @@ import gzip
 import json
 import logging
 import threading
-from collections import Counter
+from collections import Counter, defaultdict
 from urllib.parse import unquote
 
 import pysam
@@ -84,47 +84,61 @@ def format_gff_attributes(attributes: dict, field_delimiter: str = ";", value_de
     )
 
 
+def is_fasta_directive(line: str) -> bool:
+    """True for the ``##FASTA`` directive that ends a GFF3's annotation section
+    (tolerating case and a space after the ``##``)"""
+    return line.strip().lower() in {"##fasta", "## fasta"}
+
+
+def iter_gff_lines(reference_gff: str):
+    """Yield the raw lines of a GFF3's annotation section, stopping at any
+    embedded ``##FASTA`` section.
+
+    A ``.gz`` suffix routes the file through ``gzip`` (text mode)."""
+    opener = gzip.open if reference_gff.endswith(".gz") else open
+    with opener(reference_gff, "rt") as handle:
+        for line in handle:
+            if is_fasta_directive(line):
+                break
+            yield line
+
+
 def iter_gff_features(reference_gff: str):
     """Yield a Feature class from a GFF3 file.
 
     A ``.gz`` suffix routes the file through ``gzip`` (text mode), so a compressed
     GFF3 enters the same parsing loop as a plain-text one."""
-    opener = gzip.open if reference_gff.endswith(".gz") else open
     # a per-type running count backs the IDs synthesized for records that carry
     # no ID of their own (spec-legal for childless, single-line CDS/exon rows)
     type_counts = Counter()
-    with opener(reference_gff, "rt") as handle:
-        for line in handle:
-            line = line.rstrip("\n")
-            # a '##FASTA' directive ends the annotation section
-            if line.startswith("##FASTA"):
-                break
-            if not line or line.startswith("#"):
-                continue
-            fields = line.split("\t")
-            if len(fields) != 9:
-                raise ValueError(f"incorrectly formatted GFF: {len(fields)} fields recovered; 9 expected")
-            seqid, source, obs_type, start, end, score, strand, phase, raw_attributes = fields
-            feature = Feature(
-                seqid=seqid,
-                source=source,
-                type=obs_type,
-                # GFF columns are 1-based, both-inclusive; convert to 0-based, half-open
-                start=int(start) - 1,
-                end=int(end),
-                score=score,
-                strand=strand,
-                phase=phase,
-                # let the Feature parse the raw column-9 string and derive fid/pid
-                attributes=raw_attributes,
-                ingest=True,
-            )
-            if not feature.fid:
-                # synthesize a stable ID so a spec-legal ID-less record still parses
-                type_key = (feature.type or "").lower()
-                type_counts[type_key] += 1
-                feature.synthesize_id(type_counts[type_key])
-            yield feature
+    for line in iter_gff_lines(reference_gff):
+        line = line.rstrip("\n")
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 9:
+            raise ValueError(f"incorrectly formatted GFF: {len(fields)} fields recovered; 9 expected")
+        seqid, source, obs_type, start, end, score, strand, phase, raw_attributes = fields
+        feature = Feature(
+            seqid=seqid,
+            source=source,
+            type=obs_type,
+            # GFF columns are 1-based, both-inclusive; convert to 0-based, half-open
+            start=int(start) - 1,
+            end=int(end),
+            score=score,
+            strand=strand,
+            phase=phase,
+            # let the Feature parse the raw column-9 string and derive fid/pid
+            attributes=raw_attributes,
+            ingest=True,
+        )
+        if not feature.fid:
+            # synthesize a stable ID so a spec-legal ID-less record still parses
+            type_key = (feature.type or "").lower()
+            type_counts[type_key] += 1
+            feature.synthesize_id(type_counts[type_key])
+        yield feature
 
 
 def assimilate_gff(gff: str) -> FeatureCol:
@@ -138,6 +152,28 @@ def assimilate_gff(gff: str) -> FeatureCol:
     ``Parent`` pointing at such a repeated id is ambiguous and raises
     ``KeyError``."""
     return FeatureCol(iter_gff_features(gff))
+
+
+def gff_translation_tables(reference_gff: str) -> dict:
+    """Map each contig to the NCBI translation table its features declare via
+    the ``transl_table`` attribute.
+
+    Features declaring no (or a non-integer) ``transl_table`` are ignored, so a
+    contig none of whose features declare one is absent from the result. A
+    contig whose features declare more than one table raises ``ValueError``."""
+    detected = defaultdict(Counter)
+    for feature in iter_gff_features(reference_gff):
+        table = (feature.attributes.get("transl_table") or "").strip()
+        if table.isdigit():
+            detected[feature.seqid][int(table)] += 1
+    conflicts = {contig: tables for contig, tables in detected.items() if len(tables) > 1}
+    if conflicts:
+        report = "; ".join(
+            f"{contig}: {', '.join(map(str, sorted(tables)))}"
+            for contig, tables in conflicts.items()
+        )
+        raise ValueError(f"multiple translation tables detected per contig ({report})")
+    return {contig: next(iter(tables)) for contig, tables in detected.items()}
 
 
 def import_bam(bamfile: str) -> pysam.AlignmentFile:

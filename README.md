@@ -1,7 +1,7 @@
 # theiagene
 
 theiagene is a gene-centric data manipulation toolkit and library. 
-Provides a single `theiagene` command-line entrypoint with three
+Provides a single `theiagene` command-line entrypoint with four
 subcommands:
 
 - **`gene_coverage`** — quantify the breadth, depth, and read support of
@@ -10,6 +10,8 @@ subcommands:
   genes from a VCF
 - **`report_variants`** — render SnpEff variant annotations into a product-named
   report TSV
+- **`prepare_snpeff`** — prepare a reference GFF and config for building a
+  SnpEff database
 
 ## Installation
 
@@ -52,6 +54,7 @@ theiagene --help
 theiagene gene_coverage --help
 theiagene extract_variants --help
 theiagene report_variants --help
+theiagene prepare_snpeff --help
 ```
 
 #### gene_coverage
@@ -193,6 +196,36 @@ theiagene report_variants \
   --reference_gff reference.gff \
   --suppress synonymous_variant \
   --output VARIANT_REPORT.tsv
+```
+
+#### prepare_snpeff
+
+Prepare the inputs for `snpeff build` on a custom genome:
+
+- `<data_dir>/<genome_id>/genes.gff`: the reference GFF's annotation section,
+  with any embedded `##FASTA` section dropped (SnpEff reads the sequences from
+  the reference FASTA instead)
+- `--output` (default `snpEff.config`): a copy of `--template_config` with its
+  `data.dir` pointed at `--data_dir`, the genome registered under `--organism`,
+  and its codon table(s) assigned
+
+`--translation_table` (an NCBI translation table number) takes precedence and
+applies genome-wide. Without it, each contig is assigned the table its GFF
+features declare in their `transl_table` attribute, and a contig declaring none
+uses SnpEff's default (Standard) table, with a warning when no contig declares
+one. A contig whose features declare more than one table raises an error,
+as does a table SnpEff does not support; either way nothing is written, and the
+table must be given with `--translation_table`.
+
+```bash
+theiagene prepare_snpeff \
+  --reference_gff reference.gff \
+  --template_config /snpEff/snpEff.config \
+  --data_dir snpeff_data \
+  --genome_id cauris \
+  --organism "Candidozyma auris"
+
+snpeff build -c snpEff.config -gff3 cauris
 ```
 
 ## Library

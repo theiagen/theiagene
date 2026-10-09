@@ -179,3 +179,50 @@ def test_import_bam_opens_and_indexes(make_bam):
     assert "contig1" in set(imported.references)
     assert imported.get_reference_length("contig1") == 100
     assert imported.has_index()
+
+
+# --------------------------------------------------------------------------- #
+# iter_gff_lines / gff_translation_tables
+# --------------------------------------------------------------------------- #
+
+def _gff(tmp_path, rows, name="tables.gff"):
+    path = tmp_path / name
+    path.write_text("##gff-version 3\n" + "".join(f"{row}\n" for row in rows))
+    return str(path)
+
+
+def _cds(contig, idx, attributes=""):
+    return f"{contig}\t.\tCDS\t1\t300\t.\t+\t0\tID=cds-{contig}-{idx}{attributes}"
+
+
+@pytest.mark.parametrize("directive", ["##FASTA", "##fasta", "## FASTA"])
+def test_iter_gff_lines_stops_at_fasta_directive(tmp_path, directive):
+    gff = _gff(tmp_path, [_cds("chr1", 1), directive, ">chr1", "ACGT"])
+    assert list(parsers.iter_gff_lines(gff)) == ["##gff-version 3\n", _cds("chr1", 1) + "\n"]
+
+
+def test_gff_translation_tables_maps_each_contig(tmp_path):
+    gff = _gff(tmp_path, [
+        _cds("chr1", 1, ";transl_table=12"),
+        _cds("chr1", 2, ";transl_table=12"),
+        # a feature declaring no table is ignored rather than conflicting
+        _cds("chr1", 3),
+        _cds("chrM", 1, ";transl_table=3"),
+        # a contig none of whose features declare a table is absent
+        _cds("chr2", 1),
+    ])
+    assert parsers.gff_translation_tables(gff) == {"chr1": 12, "chrM": 3}
+
+
+def test_gff_translation_tables_empty_without_declarations(tmp_path):
+    assert parsers.gff_translation_tables(_gff(tmp_path, [_cds("chr1", 1)])) == {}
+
+
+def test_gff_translation_tables_rejects_conflict_within_contig(tmp_path):
+    gff = _gff(tmp_path, [
+        _cds("chr1", 1, ";transl_table=12"),
+        _cds("chr1", 2, ";transl_table=3"),
+        _cds("chr2", 1, ";transl_table=12"),
+    ])
+    with pytest.raises(ValueError, match=r"per contig \(chr1: 3, 12\)"):
+        parsers.gff_translation_tables(gff)
