@@ -39,3 +39,16 @@ def test_missing_subcommand_errors():
     with pytest.raises(SystemExit) as exc:
         cli.main([])
     assert exc.value.code != 0
+
+
+def test_build_parser_registers_prepare_snpeff_subcommand():
+    from theiagene import prepare_snpeff
+
+    args = cli.build_parser().parse_args([
+        "prepare_snpeff", "--reference_gff", "r.gff", "--template_config", "t.config",
+        "--data_dir", "d", "--genome_id", "g", "--organism", "o",
+        "--translation_table", "12",
+    ])
+    assert args._handler is prepare_snpeff.run_cli
+    assert args.translation_table == 12
+    assert args.output == "snpEff.config"
