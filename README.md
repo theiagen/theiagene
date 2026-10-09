@@ -178,6 +178,7 @@ are not deviations.
 | --- | --- | --- | --- |
 | reference sequence identifier dropped (the gene label stands in for it) | `NM_000001.1:c.428A>G` | `c.428A>G` | `NT`, `AA`, `REPORT` |
 | parentheses around predicted protein changes dropped | `p.(Lys143Arg)` | `p.Lys143Arg` | `AA`, `REPORT` |
+| synonymous change repeats the reference residue instead of using `=` | `p.Asp164=` | `p.Asp164Asp`, `D164D` | `AA`, `REPORT` |
 | `c.`/`p.` coordinate prefix dropped | `c.428A>G`, `p.Lys143Arg` | `428A>G`, `K143R` | `NT`, `AA` |
 
 ```bash

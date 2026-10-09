@@ -154,7 +154,7 @@ def test_report_line_without_index_is_unchanged():
     assert line == 'product.name: "product name" (missense_variant c.428A>G)'
 
 
-def test_report_line_decodes_percent_encoded_synonymous_change():
+def test_report_line_expands_percent_encoded_synonymous_change():
     row = {
         "Consequence": "synonymous_variant",
         "HGVSc": "rna-x:c.492C>T",
@@ -162,7 +162,25 @@ def test_report_line_decodes_percent_encoded_synonymous_change():
         "HGVSp": "prot-x:p.Asp164%3D",
     }
     line = rv.report_line(row, "product")
-    assert line == 'product: "product" (synonymous_variant c.492C>T p.Asp164=)'
+    assert line == 'product: "product" (synonymous_variant c.492C>T p.Asp164Asp)'
+
+
+@pytest.mark.parametrize(
+    "suffix,expected",
+    [
+        ("p.Asp164=", "p.Asp164Asp"),
+        ("p.D164=", "p.D164D"),
+        ("p.Ter330=", "p.Ter330Ter"),
+        # no single reference residue to repeat -- left alone
+        ("p.=", "p.="),
+        ("p.Asp164_Leu166=", "p.Asp164_Leu166="),
+        # not a synonymous change
+        ("p.Lys143Arg", "p.Lys143Arg"),
+        ("c.428A>G", "c.428A>G"),
+    ],
+)
+def test_expand_synonymous(suffix, expected):
+    assert rv._expand_synonymous(suffix) == expected
 
 
 @pytest.mark.parametrize(
@@ -170,7 +188,7 @@ def test_report_line_decodes_percent_encoded_synonymous_change():
     [
         ("p.Lys143Arg", "K143R"),
         ("p.Arg13545Ser", "R13545S"),
-        ("p.Asp164=", "D164="),
+        ("p.Asp164Asp", "D164D"),
         ("p.Lys143Ter", "K143*"),
         ("p.Lys143ArgfsTer5", "K143Rfs*5"),
         ("p.Lys143_Ala145del", "K143_A145del"),
@@ -243,11 +261,12 @@ def test_report_variants_labels_lines_by_query_gene(annotations):
     assert records == [[
         "FKS1",
         "rna-x:c.492C>T",
+        # percent-decoded, but the HGVS '=' is kept
         "prot-x:p.Asp164=",
         "492C>T",
-        "D164=",
+        "D164D",
         'FKS1: "1,3-beta-glucan synthase component FKS1" '
-        "(synonymous_variant c.492C>T p.Asp164=)",
+        "(synonymous_variant c.492C>T p.Asp164Asp)",
     ]]
 
 
@@ -276,7 +295,7 @@ def test_run_cli_writes_headed_tsv(annotations, tmp_path):
     header, record = output.read_text().splitlines()
     assert header == "#GENE\tHGVSc\tHGVSp\tNT\tAA\tREPORT"
     assert record.split("\t")[:5] == [
-        "FKS1", "rna-x:c.492C>T", "prot-x:p.Asp164=", "492C>T", "D164="
+        "FKS1", "rna-x:c.492C>T", "prot-x:p.Asp164=", "492C>T", "D164D"
     ]
 
 
@@ -291,7 +310,7 @@ def test_report_variants_falls_back_to_product_label(annotations):
     assert [record[-1] for record in records] == [
         '1.3-beta-glucan.synthase.component.FKS1: '
         '"1,3-beta-glucan synthase component FKS1" '
-        "(synonymous_variant c.492C>T p.Asp164=)"
+        "(synonymous_variant c.492C>T p.Asp164Asp)"
     ]
 
 
