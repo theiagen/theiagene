@@ -8,7 +8,7 @@ subcommands:
   coverage over query genes from a BAM
 - **`extract_variants`** — extract a sub-VCF of variants that fall within query
   genes from a VCF
-- **`report_variants`** — render VEP variant annotations into a product-named
+- **`report_variants`** — render SnpEff variant annotations into a product-named
   report TSV
 
 ## Installation
@@ -120,23 +120,23 @@ theiagene extract_variants \
 
 #### report_variants
 
-Render a VEP `--tab` output TSV into a gene-labelled report TSV, one record per
-kept row:
+Render a SnpEff-annotated VCF into a gene-labelled report TSV, one record per
+kept `ANN` entry:
 
 | column | content | example |
 | --- | --- | --- |
 | `GENE` | gene label (see below) | `ERG11` |
-| `HGVSc` | VEP's HGVSc string, percent-decoded | `rna-x:c.428A>G` |
-| `HGVSp` | VEP's HGVSp string, percent-decoded | `prot-x:p.Lys143Arg` |
-| `NT` | abbreviated nucleotide change: HGVS form without its prefix | `428A>G`, `123_125del` |
-| `AA` | abbreviated amino acid change: one-letter residue codes | `K143R`, `K143Rfs*5` |
-| `REPORT` | formatted report line (see below) | `ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg)` |
+| `HGVSc` | SnpEff's HGVS.c, prefixed with the transcript ID | `rna-x:c.428A>G` |
+| `HGVSp` | SnpEff's HGVS.p, prefixed with the CDS `protein_id` (else the transcript ID) | `prot-x:p.Lys143Arg` |
+| `NT` | abbreviated nucleotide change: HGVS form without its prefix | `428A>G`, `383delA` |
+| `AA` | abbreviated amino acid change: one-letter residue codes | `K143R`, `K128fs` |
+| `REPORT` | formatted report line (see below) | `ERG11: "lanosterol 14-alpha demethylase" (missense_variant c.428A>G p.Lys143Arg; T:0 C:562)` |
 
 The header line is `#`-prefixed (`#GENE  HGVSc  HGVSp  NT  AA  REPORT`), and a
 `NA` denotes fields that have no HGVS string. The TSV prints to stdout unless
 `--output` is given.
 
-Each report line has the form `label: "product" (consequence)`:
+Each report line has the form `label: "product" (consequence HGVS.c HGVS.p; depths)`:
 
 - **label**: the `--query_genes` term that matched the feature, or the `--bedfile`
   name if there is no query term.
@@ -145,51 +145,52 @@ Each report line has the form `label: "product" (consequence)`:
   (e.g. `lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
 - **product**: the CDS product from the reference GFF. It is quoted so commas
   do not break the comma-delimited report.
-- **consequence**: the HGVS consequence, without the transcript and protein prefixes.
+- **consequence**: SnpEff's consequence term(s), `&`-joined, followed by the HGVS
+  changes without their transcript and protein prefixes.
+- **depths**: the read depth for each allele, read off the VCF's sample `AD`
+  (else `RO`/`AO`) field; omitted when the record carries neither.
 
-When the source VCF is passed with `--vcf`, each line also ends with the read
-depth for each allele (e.g. `; T:0 C:562`).
+An entry is tied back to the annotation by its variant's coordinates, which
+select every overlapping annotation unit — the transcripts where the annotation
+has them, else genes, else bare CDS records. Its `Feature_ID` is consulted only to
+choose between several units overlapping one variant (matched against the unit's
+`ID`, `Name` or `transcript_id`), since SnpEff emits a separate entry per
+transcript and each entry's HGVS strings belong to exactly one of them.
 
-A row is tied back to the annotation by its `Location` rather than by its
-`Feature` column: the identifier VEP writes is whichever attribute its own
-GFF parser read off the transcript (`ID`, `Name`, `transcript_id`), which varies
-by annotation source and need not be the `ID` this package keys features on. The
-variant's coordinates select every overlapping annotation unit — the transcripts
-where the annotation has them, else genes, else bare CDS records — and `Feature`
-is consulted only to choose between several units overlapping one variant, since
-VEP emits a separate row per transcript and each row's HGVS strings belong to
-exactly one of them.
-
-A row is dropped when its consequence is suppressed, when it carries neither an
-HGVSc nor an HGVSp string, when its `Location` does not parse, or when that
-location resolves to no CDS product — because nothing overlaps it, because
-several units do and none answers to the row's `Feature`, or because the
-resolved unit carries no `--feature_qualifier` attribute.
+An entry is dropped when any of its consequence terms is suppressed, when it is
+not annotated against a transcript (e.g. `intergenic_region`), when it carries
+neither an HGVS.c nor an HGVS.p string, or when its variant resolves to no CDS
+product — because nothing overlaps it, because several units do and none answers
+to the entry's `Feature_ID`, or because the resolved unit carries no
+`--feature_qualifier` attribute. A transcript SnpEff flags with
+`WARNING_TRANSCRIPT_NO_START_CODON` or `WARNING_TRANSCRIPT_INCOMPLETE` is treated
+as noncoding, so its protein change is reported as `NA`.
 
 #### Deviations from HGVS
 
-The `HGVSc` and `HGVSp` columns pass VEP's output unaltered following
-decoding percent sign. The other columns follow the
+HGVS strings are SnpEff's, so the columns follow the
 [HGVS recommendations](https://hgvs-nomenclature.org/) except where noted below.
-One-letter amino acid codes, and `*` for a stop codon, are permitted by HGVS and
-are not deviations.
+One-letter amino acid codes, `*` for a stop codon, and the short frameshift form
+(`p.Lys128fs`) are permitted by HGVS and are not deviations.
 
 | deviation | HGVS | reported | applies to |
 | --- | --- | --- | --- |
 | reference sequence identifier dropped (the gene label stands in for it) | `NM_000001.1:c.428A>G` | `c.428A>G` | `NT`, `AA`, `REPORT` |
-| parentheses around predicted protein changes dropped | `p.(Lys143Arg)` | `p.Lys143Arg` | `AA`, `REPORT` |
-| synonymous change repeats the reference residue instead of using `=` | `p.Asp164=` | `p.Asp164Asp`, `D164D` | `AA`, `REPORT` |
+| parentheses around predicted protein changes absent | `p.(Lys143Arg)` | `p.Lys143Arg` | `HGVSp`, `AA`, `REPORT` |
+| synonymous change repeats the reference residue instead of using `=` | `p.Asp164=` | `p.Asp164Asp`, `D164D` | `HGVSp`, `AA`, `REPORT` |
+| deleted/duplicated bases listed | `c.383del` | `c.383delA` | `HGVSc`, `NT`, `REPORT` |
+| protein-level duplication described as an insertion | `p.Gly294_Ser297dup` | `p.Ala292_Ser293insSerGlySerAla` | `HGVSp`, `AA`, `REPORT` |
+| protein-level indel not shifted 3′ through a repeat | `p.Gln444_Gly448del` | `p.Phe432_Gly436del` | `HGVSp`, `AA`, `REPORT` |
 | `c.`/`p.` coordinate prefix dropped | `c.428A>G`, `p.Lys143Arg` | `428A>G`, `K143R` | `NT`, `AA` |
 
 ```bash
 theiagene report_variants \
-  --vep_tsv variants.vep.tsv \
+  --vcf sample.snpeff.vcf \
   --reference_gff reference.gff
 
 theiagene report_variants \
-  --vep_tsv variants.vep.tsv \
+  --vcf sample.snpeff.vcf \
   --reference_gff reference.gff \
-  --vcf sample.vcf \
   --suppress synonymous_variant \
   --output VARIANT_REPORT.tsv
 ```
