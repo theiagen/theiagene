@@ -155,11 +155,10 @@ def assimilate_gff(gff: str) -> FeatureCol:
 
 
 def gff_translation_tables(reference_gff: str) -> dict:
-    """Map each contig to the NCBI translation table its features declare via
+    """Map each contig to the NCBI translation table of its features via
     the ``transl_table`` attribute.
 
-    Features declaring no (or a non-integer) ``transl_table`` are ignored, so a
-    contig none of whose features declare one is absent from the result. A
+    Features declaring no (or a non-integer) ``transl_table`` are ignored. A
     contig whose features declare more than one table raises ``ValueError``."""
     detected = defaultdict(Counter)
     for feature in iter_gff_features(reference_gff):

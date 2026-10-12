@@ -87,6 +87,7 @@ def codon_table_lines(genome_id: str, reference_gff: str, translation_table: int
         )
         return []
 
+    # populate a dictionary relating contigs to translation table
     contigs_by_table = defaultdict(list)
     lines = []
     for contig, table in detected.items():

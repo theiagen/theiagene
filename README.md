@@ -211,14 +211,12 @@ SnpEff reads the genome's sequences from `<data_dir>/<genome_id>/sequences.fa`
 rather than the GFF, so the reference FASTA is staged there separately.
 
 Each contig is assigned the codon table its GFF features declare in their
-`transl_table` attribute (an NCBI translation table number), so a nuclear genome
-and its mitochondrion can each carry their own. Features declaring no
-`transl_table` are ignored, and a contig none of whose features declare one
-falls back to SnpEff's default (Standard) table — with a warning when no contig
+`transl_table` attribute (an NCBI translation table number). Features declaring no
+`transl_table` are ignored, and a contig with none
+fall back to SnpEff's default (Standard) table — with a warning when no contig
 declares one at all. `--translation_table` takes precedence over the GFF and
 applies one table genome-wide; it is required when a contig's features declare
-more than one table, which raises an error rather than guessing. An error, or a
-table SnpEff does not support, leaves nothing written.
+multiple translation tables.
 
 ```bash
 theiagene prepare_snpeff \
