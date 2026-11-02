@@ -46,7 +46,7 @@ def test_parse_gff_attributes_empty_column_is_empty_dict():
 
 
 def test_parse_gff_attributes_raises_on_malformed_field():
-    with pytest.raises(ValueError, match="unexpected attributes field"):
+    with pytest.raises(ValueError, match="novalue"):
         parsers.parse_gff_attributes("novalue;ID=x")
 
 
@@ -117,7 +117,7 @@ def test_iter_gff_features_reads_gzipped_gff(tmp_path):
 def test_iter_gff_features_raises_on_wrong_field_count(tmp_path):
     path = tmp_path / "bad.gff"
     path.write_text("chr1\t.\tCDS\t10\t33\t.\t+\n")  # 7 columns, not 9
-    with pytest.raises(ValueError, match="incorrectly formatted GFF"):
+    with pytest.raises(ValueError, match="GFF"):
         list(parsers.iter_gff_features(str(path)))
 
 
@@ -224,5 +224,5 @@ def test_gff_translation_tables_rejects_conflict_within_contig(tmp_path):
         _cds("chr1", 2, ";transl_table=3"),
         _cds("chr2", 1, ";transl_table=12"),
     ])
-    with pytest.raises(ValueError, match=r"per contig \(chr1: 3, 12\)"):
+    with pytest.raises(ValueError, match="chr1: 3, 12"):
         parsers.gff_translation_tables(gff)

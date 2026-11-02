@@ -104,12 +104,24 @@ def codon_table_lines(genome_id: str, reference_gff: str, translation_table: int
 def write_snpeff_config(template_config: str, output: str, data_dir: str, genome_id: str,
                         organism: str, codon_lines: list) -> None:
     """Copy ``template_config`` to ``output``, pointing ``data.dir`` at
-    ``data_dir`` and appending the genome registration and ``codon_lines``"""
+    ``data_dir`` and appending the genome registration and ``codon_lines``.
+
+    A template with no ``data.dir`` line has one appended, lest SnpEff fall back
+    to ``./data/`` beside the config; a template whose last line lacks a newline
+    is terminated first, so the appended lines each start their own."""
+    data_dir_line = f"data.dir = {os.path.join(os.path.abspath(data_dir), '')}\n"
+    wrote_data_dir = False
+    line = "\n"
     with open(template_config) as template, open(output, "w") as config:
         for line in template:
             if re.match(r"data\.dir\s*=", line):
-                line = f"data.dir = {os.path.join(os.path.abspath(data_dir), '')}\n"
+                line = data_dir_line
+                wrote_data_dir = True
             config.write(line)
+        if not line.endswith("\n"):
+            config.write("\n")
+        if not wrote_data_dir:
+            config.write(data_dir_line)
         config.write(f"{genome_id}.genome : {organism}\n")
         config.writelines(codon_lines)
 

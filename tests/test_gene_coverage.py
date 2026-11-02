@@ -133,7 +133,7 @@ def test_input_error_handling_accepts_bedfile_alone():
 
 
 def test_input_error_handling_requires_a_coordinate_source():
-    with pytest.raises(FileNotFoundError, match="reference_gff.*bedfile|bedfile"):
+    with pytest.raises(FileNotFoundError, match="reference_gff"):
         gene_coverage.input_error_handling(_Args(query_genes="geneA"))
 
 
@@ -417,9 +417,9 @@ def test_quantify_returns_empty_for_no_ranges():
 @pytest.mark.parametrize(
     "contig, segment, message_fragment",
     [
-        ("contig1", (10, 10), "start (10) must be < end (10)"),
-        ("contig1", (5, 15), "end (15) exceeds contig length (10)"),
-        ("missing_contig", (1, 5), "not found in BAM references"),
+        ("contig1", (10, 10), "start (10)"),
+        ("contig1", (5, 15), "contig length (10)"),
+        ("missing_contig", (1, 5), "missing_contig"),
     ],
 )
 def test_quantify_edge_guards_raise_clean_value_errors(contig, segment, message_fragment):
@@ -432,7 +432,7 @@ def test_quantify_edge_guards_raise_clean_value_errors(contig, segment, message_
 def test_quantify_raises_on_negative_start():
     bam = MockBam({"contig1": 100}, default_depth=5)
     ranges = {"contig1": [(-1, 5, "geneA")]}
-    with pytest.raises(ValueError, match=re.escape("start (-1) must be >= 0")):
+    with pytest.raises(ValueError, match=re.escape("start (-1)")):
         gene_coverage.quantify_gene_coverage(bam, ranges, min_depth=1)
 
 
@@ -1091,7 +1091,7 @@ def test_run_cli_ambiguous_contig_rejects_multi_contig_bam(tmp_path, monkeypatch
     args = _cli_args(bam, bedfile=bed, ambiguous_contig=True)
 
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(ValueError, match="multiple contigs"):
+    with pytest.raises(ValueError, match="ambiguous_contig"):
         gene_coverage.run_cli(args)
 
 

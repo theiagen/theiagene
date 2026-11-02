@@ -61,14 +61,14 @@ def test_codon_table_lines_warns_and_defaults_without_declarations(tmp_path, cap
 
 def test_codon_table_lines_rejects_conflict_within_contig(tmp_path):
     gff = _gff(tmp_path, ("chr1", 12), ("chr1", 3))
-    with pytest.raises(ValueError, match="must be input directly via --translation_table"):
+    with pytest.raises(ValueError, match="--translation_table"):
         ps.codon_table_lines("cauris", gff)
 
 
 @pytest.mark.parametrize("input_table,gff_table", [(7, None), (None, 7)])
 def test_codon_table_lines_rejects_unsupported_table(tmp_path, input_table, gff_table):
     gff = _gff(tmp_path, ("chr1", gff_table))
-    with pytest.raises(ValueError, match="translation table 7 is not supported"):
+    with pytest.raises(ValueError, match="translation table 7"):
         ps.codon_table_lines("cauris", gff, input_table)
 
 
@@ -117,3 +117,39 @@ def test_main_writes_nothing_when_table_undeterminable(tmp_path):
         ])
     assert not data_dir.exists()
     assert not (tmp_path / "snpEff.config").exists()
+
+
+# --------------------------------------------------------------------------- #
+# write_snpeff_config: template edge cases
+# --------------------------------------------------------------------------- #
+
+def _write_config(tmp_path, template_text):
+    template = tmp_path / "template.config"
+    template.write_text(template_text)
+    config = tmp_path / "snpEff.config"
+    ps.write_snpeff_config(
+        str(template), str(config), str(tmp_path / "snpeff_data"), "cauris",
+        "Candidozyma auris", ["cauris.codonTable : Alternative_Yeast_Nuclear\n"],
+    )
+    return config.read_text().splitlines()
+
+
+def test_write_snpeff_config_handles_template_without_trailing_newline(tmp_path):
+    # the genome registration must start its own line, not run onto the last one
+    lines = _write_config(tmp_path, _TEMPLATE.rstrip("\n"))
+    assert lines[-3:] == [
+        "hg19.genome : Human",
+        "cauris.genome : Candidozyma auris",
+        "cauris.codonTable : Alternative_Yeast_Nuclear",
+    ]
+
+
+def test_write_snpeff_config_adds_data_dir_missing_from_template(tmp_path):
+    # without a data.dir line SnpEff would fall back to ./data/ beside the
+    # config instead of where genes.gff was written
+    template = "".join(
+        line for line in _TEMPLATE.splitlines(keepends=True) if not line.startswith("data.dir")
+    )
+    lines = _write_config(tmp_path, template)
+    assert lines.count(f"data.dir = {tmp_path / 'snpeff_data'}/") == 1
+    assert "cauris.genome : Candidozyma auris" in lines

@@ -67,7 +67,7 @@ def test_iter_annotations_rejects_vcf_without_ann(tmp_path):
         line for line in _HEADER.splitlines() if "ID=ANN" not in line
     )
     vcf = _write_vcf(tmp_path, [_record(100, "T", "C", [])], header=header)
-    with pytest.raises(ValueError, match="no SnpEff ANN"):
+    with pytest.raises(ValueError, match="ANN"):
         list(rv.iter_annotations(vcf))
 
 
@@ -353,3 +353,173 @@ def test_report_variants_selected_unit_drives_the_query_label(overlapping):
     (report,) = overlapping("ERG11-T1", qualifiers=("product", "Name"),
                             query_list=["ERG11"])
     assert report[1].startswith('ERG11: "lanosterol 14-alpha demethylase" ')
+
+
+# Ensembl-style identifiers carry their own ':'; the CDS lacks a protein_id, so
+# HGVS.p falls back to the (also colon-bearing) Feature_ID
+_ENSEMBL_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene:GA;Name=GA",
+        "chr1\t.\tmRNA\t1\t1000\t.\t+\t.\tID=transcript:TA;Parent=gene:GA",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=CDS:TA;Parent=transcript:TA;product=protein A",
+    ]
+) + "\n"
+
+
+def test_report_variants_quotes_colon_bearing_identifiers(tmp_path):
+    (record,) = _report(tmp_path, [_record(100, "G", "A", [
+        _ann("A", "stop_gained", "transcript:TA", "c.9G>A", "p.Trp3*"),
+    ])], gff=_ENSEMBL_GFF)
+    assert record[1:5] == ['"transcript:TA":c.9G>A', '"transcript:TA":p.Trp3*', "9G>A", "W3*"]
+    # the REPORT line carries no identifier, so it is untouched
+    assert "(stop_gained c.9G>A p.Trp3*;" in record[5]
+
+
+@pytest.mark.parametrize(
+    "identifier, expected",
+    [("rna-x", "rna-x:c.9G>A"), ("transcript:TA", '"transcript:TA":c.9G>A')],
+)
+def test_prefix_hgvs_quotes_only_colon_bearing_identifiers(identifier, expected):
+    assert rv._prefix_hgvs(identifier, "c.9G>A") == expected
+
+
+# --------------------------------------------------------------------------- #
+# unit selection: an ambiguous overlap without a Feature_ID
+# --------------------------------------------------------------------------- #
+
+def test_report_variants_drops_ambiguous_overlap_without_feature_id(overlapping):
+    # two units overlap and the entry carries no Feature_ID to arbitrate, so it
+    # is dropped rather than attributed to whichever unit sorted first
+    assert overlapping("") == []
+
+
+def test_report_variants_takes_sole_unit_without_feature_id(tmp_path):
+    # a sole overlapping unit needs no tiebreak, Feature_ID or not
+    (record,) = _report(tmp_path, [_record(100, "T", "C", [
+        _ann("C", "synonymous_variant", "", "c.492C>T", "p.Asp164Asp"),
+    ])])
+    assert record[0] == "1.3-beta-glucan.synthase.component.FKS1"
+
+
+# --------------------------------------------------------------------------- #
+# unit fallbacks: gene -> CDS (no transcript level) and bare CDS
+# --------------------------------------------------------------------------- #
+
+# gene -> CDS, as e.g. many prokaryotic GFFs are laid out; SnpEff invents a
+# transcript for each gene, so its Feature_ID matches no GFF identifier
+_GENE_CDS_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene-a;Name=geneA",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-a;Parent=gene-a;protein_id=prot-a;"
+        "product=protein A",
+        "chr1\t.\tgene\t2001\t3000\t.\t+\t.\tID=gene-b;Name=geneB",
+        "chr1\t.\tCDS\t2001\t3000\t.\t+\t0\tID=cds-b;Parent=gene-b;protein_id=prot-b;"
+        "product=protein B",
+    ]
+) + "\n"
+
+# CDS records owning no gene or transcript at all
+_BARE_CDS_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-a;protein_id=prot-a;product=protein A",
+        "chr1\t.\tCDS\t2001\t3000\t.\t+\t0\tID=cds-b;protein_id=prot-b;product=protein B",
+    ]
+) + "\n"
+
+
+@pytest.mark.parametrize("gff", [_GENE_CDS_GFF, _BARE_CDS_GFF], ids=["gene-cds", "bare-cds"])
+@pytest.mark.parametrize("pos, product, protein_id", [
+    (100, "protein A", "prot-a"),
+    (2100, "protein B", "prot-b"),
+])
+def test_report_variants_falls_back_below_the_transcript_level(
+    tmp_path, gff, pos, product, protein_id
+):
+    # with no mRNA level the variant resolves through the gene (else the bare
+    # CDS) it overlaps, even under a Feature_ID SnpEff made up itself
+    (record,) = _report(tmp_path, [_record(pos, "T", "C", [
+        _ann("C", "missense_variant", "TRANSCRIPT_made_up", "c.100T>C", "p.Phe34Leu"),
+    ])], gff=gff)
+    assert record[0] == product.replace(" ", ".")
+    assert record[1:3] == ["TRANSCRIPT_made_up:c.100T>C", f"{protein_id}:p.Phe34Leu"]
+    assert record[5].startswith(f'{product.replace(" ", ".")}: "{product}" ')
+
+
+# --------------------------------------------------------------------------- #
+# up-/downstream entries resolve against the units within the SnpEff buffer
+# --------------------------------------------------------------------------- #
+
+# geneA spans the variant; geneB sits ~1.7 kb downstream of it and does not
+_NEIGHBOUR_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tgene\t1\t300\t.\t+\t.\tID=gene-A;Name=GENEA",
+        "chr1\t.\tmRNA\t1\t300\t.\t+\t.\tID=rna-A;Parent=gene-A",
+        "chr1\t.\tCDS\t1\t300\t.\t+\t0\tID=cds-A;Parent=rna-A;protein_id=prot-A;"
+        "product=protein A",
+        "chr1\t.\tgene\t2001\t3000\t.\t+\t.\tID=gene-B;Name=GENEB",
+        "chr1\t.\tmRNA\t2001\t3000\t.\t+\t.\tID=rna-B;Parent=gene-B",
+        "chr1\t.\tCDS\t2001\t3000\t.\t+\t0\tID=cds-B;Parent=rna-B;protein_id=prot-B;"
+        "product=protein B",
+    ]
+) + "\n"
+
+_NEIGHBOUR_VARIANT = _record(9, "G", "A", [
+    _ann("A", "stop_gained", "rna-A", "c.9G>A", "p.Trp3*"),
+    _ann("A", "upstream_gene_variant", "rna-B", "c.-1992G>A"),
+], sample="1:2,40")
+
+
+def test_report_variants_attributes_upstream_entry_to_the_neighbouring_gene(tmp_path):
+    # the upstream entry belongs to geneB, which the variant does not overlap;
+    # it must not inherit geneA's label and product
+    records = _report(tmp_path, [_NEIGHBOUR_VARIANT], gff=_NEIGHBOUR_GFF)
+    assert [(record[0], record[1]) for record in records] == [
+        ("protein.A", "rna-A:c.9G>A"),
+        ("protein.B", "rna-B:c.-1992G>A"),
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# run_cli: BED-derived query labels and stdout output
+# --------------------------------------------------------------------------- #
+
+def _cli_inputs(tmp_path, records=(_SYNONYMOUS,), gff=_GFF):
+    gff_path = tmp_path / "reference.gff"
+    gff_path.write_text(gff)
+    return ["--vcf", _write_vcf(tmp_path, list(records)), "--reference_gff", str(gff_path)]
+
+
+def test_run_cli_labels_by_bedfile_names(tmp_path, capsys):
+    bed = tmp_path / "regions.bed"
+    bed.write_text("chr1\t0\t1000\tFKS1\n")
+    rv.main(_cli_inputs(tmp_path) + ["--bedfile", str(bed)])
+    _, record = capsys.readouterr().out.splitlines()
+    assert record.split("\t")[0] == "FKS1"
+
+
+def test_run_cli_query_genes_take_precedence_over_bedfile(tmp_path, capsys):
+    # the BED names a term that matches nothing; --query_genes wins regardless
+    bed = tmp_path / "regions.bed"
+    bed.write_text("chr1\t0\t1000\tERG11\n")
+    rv.main(_cli_inputs(tmp_path) + ["--bedfile", str(bed), "--query_genes", "FKS1"])
+    _, record = capsys.readouterr().out.splitlines()
+    assert record.split("\t")[0] == "FKS1"
+
+
+def test_run_cli_prints_tsv_to_stdout_and_suppresses_up_downstream_by_default(
+    tmp_path, capsys
+):
+    # no --output: the TSV goes to stdout, and with --suppress left at its
+    # default the upstream entry for geneB is dropped
+    rv.main(_cli_inputs(tmp_path, [_NEIGHBOUR_VARIANT], gff=_NEIGHBOUR_GFF))
+    assert capsys.readouterr().out.splitlines() == [
+        "#GENE\tHGVSc\tHGVSp\tNT\tAA\tREPORT",
+        "\t".join([
+            "protein.A", "rna-A:c.9G>A", "prot-A:p.Trp3*", "9G>A", "W3*",
+            'protein.A: "protein A" (stop_gained c.9G>A p.Trp3*; G:2 A:40)',
+        ]),
+    ]

@@ -234,6 +234,17 @@ def _select_unit(units: list, feature_id: str):
     return None
 
 
+def _prefix_hgvs(identifier: str, hgvs: str) -> str:
+    """Prefix ``hgvs`` with the sequence ``identifier`` it is described against,
+    as ``identifier:hgvs``. An identifier that itself carries a ``:`` (e.g.
+    Ensembl's ``transcript:TA``) is double-quoted, so the ``:`` separating it
+    from the HGVS string stays the only unquoted one -- ``"transcript:TA":c.9G>A``
+    rather than the ambiguous ``transcript:TA:c.9G>A``."""
+    if ":" in identifier:
+        identifier = f'"{identifier}"'
+    return f"{identifier}:{hgvs}"
+
+
 # report TSV columns: the gene label, the identifier-prefixed HGVS strings,
 # their abbreviations and the formatted report line
 COLUMNS = ("GENE", "HGVSc", "HGVSp", "NT", "AA", "REPORT")
@@ -263,7 +274,8 @@ def report_variants(
     label when no query matched.
 
     HGVS.c is prefixed with the transcript's ``Feature_ID`` and HGVS.p with its
-    CDS ``protein_id`` (else the ``Feature_ID``); NT/AA are their abbreviations
+    CDS ``protein_id`` (else the ``Feature_ID``), an identifier containing ``:``
+    double-quoted (see :func:`_prefix_hgvs`); NT/AA are their abbreviations
     (see :func:`_abbreviate`), and a field the entry has no HGVS string for is
     ``NA``. A transcript SnpEff flags as partial (:data:`_PARTIAL_TRANSCRIPT`) is
     treated as noncoding, so its HGVS.p is dropped."""
@@ -327,8 +339,8 @@ def report_variants(
         protein_id = _type_qualifier(feature, feature_type, ["protein_id"]) or entry["Feature_ID"]
         records.append([
             label,
-            f"{entry['Feature_ID']}:{hgvsc}" if hgvsc else "NA",
-            f"{protein_id}:{hgvsp}" if hgvsp else "NA",
+            _prefix_hgvs(entry["Feature_ID"], hgvsc) if hgvsc else "NA",
+            _prefix_hgvs(protein_id, hgvsp) if hgvsp else "NA",
             _abbreviate(hgvsc) if hgvsc else "NA",
             _abbreviate(hgvsp) if hgvsp else "NA",
             report_line(label, qualifier_hit, entry["Annotation"], hgvsc, hgvsp,

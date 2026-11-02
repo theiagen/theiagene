@@ -143,6 +143,10 @@ The header line is `#`-prefixed (`#GENE  HGVSc  HGVSp  NT  AA  REPORT`), and a
 `NA` denotes fields that have no HGVS string. The TSV prints to stdout unless
 `--output` is given.
 
+An identifier containing a `:` (e.g. Ensembl's `transcript:TA`) is double-quoted
+in `HGVSc`/`HGVSp`, so the `:` separating it from the HGVS string is the only
+unquoted one: `"transcript:TA":c.9G>A` rather than `transcript:TA:c.9G>A`.
+
 Each report line has the form `label: "product" (consequence HGVS.c HGVS.p; depths)`:
 
 - **label**: the `--query_genes` term that matched the feature, or the `--bedfile`
@@ -199,6 +203,7 @@ HGVS strings deviate
 | deviation | HGVS | reported | applies to |
 | --- | --- | --- | --- |
 | reference sequence identifier dropped (the gene label stands in for it) | `NM_000001.1:c.428A>G` | `c.428A>G` | `NT`, `AA`, `REPORT` |
+| reference sequence identifier containing `:` double-quoted | `transcript:TA:c.9G>A` | `"transcript:TA":c.9G>A` | `HGVSc`, `HGVSp` |
 | parentheses around predicted protein changes absent | `p.(Lys143Arg)` | `p.Lys143Arg` | `HGVSp`, `AA`, `REPORT` |
 | synonymous change repeats the reference residue instead of using `=` | `p.Asp164=` | `p.Asp164Asp`, `D164D` | `HGVSp`, `AA`, `REPORT` |
 | deleted/duplicated bases listed | `c.383del` | `c.383delA` | `HGVSc`, `NT`, `REPORT` |
