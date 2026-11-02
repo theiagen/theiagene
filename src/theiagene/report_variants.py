@@ -78,7 +78,7 @@ def iter_annotations(vcf: str):
     handle = import_vcf(vcf)
     try:
         if "ANN" not in handle.header.info:
-            raise ValueError(f"{vcf} carries no SnpEff ANN annotations")
+            raise ValueError(f"{vcf} SnpEff annotations (ANN) are not in VCF header")
         for record in handle:
             for raw in record.info.get("ANN") or ():
                 yield record, dict(zip(_ANN_FIELDS, raw.split("|")))
@@ -219,8 +219,10 @@ def _select_unit(units: list, feature_id: str):
     no ``Feature_ID`` to arbitrate it, and when none of the units answer to the
     one it carries -- all of which leave the caller to skip the entry rather
     than attribute it to whichever unit happened to sort first."""
+    # one entry, no ambiguity
     if len(units) < 2:
         return units[0] if units else None
+    # no feature_id, no relationship can conclusively be established
     if not feature_id:
         return None
     for unit in units:
@@ -245,6 +247,7 @@ def report_variants(
     qualifiers: list,
     query_list: list = None,
     exact_match: bool = False,
+    snpeff_buffer: int = 5000,
 ) -> list:
     """Turn a SnpEff-annotated VCF into query-labelled report records, one per
     kept ``ANN`` entry, whose fields follow :data:`COLUMNS`.
@@ -266,30 +269,52 @@ def report_variants(
     treated as noncoding, so its HGVS.p is dropped."""
     records = []
     for record, entry in iter_annotations(vcf):
-        if any(term in suppress for term in entry["Annotation"].split("&")):
+        annotation_terms = set(entry["Annotation"].split("&"))
+        # skip suppressed entries
+        if suppress.intersection(annotation_terms):
             continue
+        # only looking at transcripts
         if entry["Feature_Type"] != "transcript":
             continue
         hgvsc = entry["HGVS.c"]
         hgvsp = entry["HGVS.p"]
+        # don't annotate partial transcripts
         if _PARTIAL_TRANSCRIPT & set(entry["Messages"].split("&")):
             hgvsp = ""
         if not hgvsc and not hgvsp:
             continue
+        # develop a crude variant annotation directly from the position of the variant
         variant = f"{record.contig}:{record.pos} {record.ref}>{entry['Allele']}"
         # units are taken from one level: the transcripts SnpEff annotates
         # against, else the genes of an annotation carrying no transcript level
         # (gene -> CDS), else bare feature_type records owning no gene at all.
         # Taking one level keeps a locus from counting once per tier of its own
         # hierarchy
-        hits = features.index(record.contig, record.start, record.stop)
+        # extract hits from the non-overlapping annotations
+        if annotation_terms.intersection({"upstream_gene_variant","downstream_gene_variant"}):
+            hits = features.index(record.contig, record.start-snpeff_buffer, record.stop+snpeff_buffer)
+        # extract hits from overlapping annotations
+        else:
+            hits = features.index(record.contig, record.start, record.stop)
+        # preferentially select the RNAs > genes > feature_type groups to parse for 
+        # relating the variant to a specific entry hiearchy within the GFF
+        # name-based relationships are prone to spuriousness
+        if hits.rnas:
+            units = hits.rnas
+            unit_group = "transcript"
+        elif hits.genes:
+            units = hits.genes
+            unit_group = "gene"
+        else:
+            units = hits[feature_type]
+            unit_group = feature_type
         units = hits.rnas or hits.genes or hits[feature_type]
         feature = _select_unit(units, entry["Feature_ID"])
         qualifier_hit = _type_qualifier(feature, feature_type, qualifiers)
         if qualifier_hit is None:
             logger.warning(
-                f"no {feature_type} {qualifiers} qualifier resolved for "
-                f"{entry['Feature_ID']}; skipping variant {variant}"
+                f"could not match {entry['Feature_ID']} to a {unit_group}"
+                f"; skipping variant {variant}"
             )
             continue
         label = _query_label(feature, query_list, qualifiers, exact_match)
@@ -338,7 +363,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--suppress",
-        help="comma-delimited SnpEff consequence term(s) whose annotations are dropped",
+        help="comma-delimited SnpEff consequence term(s) whose annotations are dropped; "
+        "DEFAULT: 'upstream_gene_variant,downstream_gene_variant'",
+        default="upstream_gene_variant,downstream_gene_variant"
     )
     parser.add_argument(
         "--feature_qualifier",
@@ -347,6 +374,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "off the CDS descendant(s) to name the product",
     )
     parser.add_argument("--feature_type", default="CDS")
+    parser.add_argument("--extragene_variant_buffer", default=5000, type=int,
+                        help="bases +/- gene boundaries to associate a extragene variant with "
+                        "a feature; DEFAULT: 5000")
     parser.add_argument(
         "--output",
         help="write the report TSV here instead of stdout",
@@ -377,6 +407,7 @@ def run_cli(args: argparse.Namespace) -> int:
         qualifiers,
         query_list,
         args.exact_match,
+        args.extragene_variant_buffer,
     )
 
     tsv = "\n".join(["#" + "\t".join(COLUMNS)] + ["\t".join(record) for record in records])

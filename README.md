@@ -170,6 +170,27 @@ product. A transcript SnpEff flags with
 `WARNING_TRANSCRIPT_NO_START_CODON` or `WARNING_TRANSCRIPT_INCOMPLETE` is treated
 as noncoding, so its protein change is reported as `NA`.
 
+#### Suppressed variant types
+
+By default, `--suppress` is `upstream_gene_variant,downstream_gene_variant`.
+Manually setting `--suppress` replaces this default, so list
+these terms again to keep them suppressed alongside others.
+
+SnpEff emits an up-/downstream entry for every transcript within 5 kb of a
+variant (`-ud 5000` for SnpEff, `--extragene_variant_buffer` for theiagene), 
+so a variant inside one gene is also reported
+against its neighbours.
+
+If up-/downstream variants are included, each entry is resolved against the units 
+within `--extragene_variant_buffer` of the variant (5000 by default), and the variant's 
+`Feature_ID` picks between them. Caveats:
+
+- GFFs without a transcript level (e.g. Prokka): SnpEff invents its own
+  transcript IDs, which match no GFF identifier, so an entry with more than one
+  gene nearby is dropped with a warning.
+- GFFs mixing levels (some genes with mRNA, some without): an entry may be
+  attributed to the only mRNA-bearing unit nearby.
+
 #### Deviations from HGVS
 
 HGVS strings deviate
