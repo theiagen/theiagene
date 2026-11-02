@@ -320,7 +320,6 @@ def report_variants(
         else:
             units = hits[feature_type]
             unit_group = feature_type
-        units = hits.rnas or hits.genes or hits[feature_type]
         feature = _select_unit(units, entry["Feature_ID"])
         qualifier_hit = _type_qualifier(feature, feature_type, qualifiers)
         if qualifier_hit is None:
