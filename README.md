@@ -128,7 +128,11 @@ theiagene extract_variants \
 
 Render a SnpEff-annotated VCF into a gene-labelled report TSV, one record per
 kept `ANN` entry. `--reference_gff` must be the GFF the SnpEff database was
-built from (see [prepare_snpeff](#prepare_snpeff)). A TSV is generated and formatted as follows:
+built from (see [prepare_snpeff](#prepare_snpeff)). Each `ANN` entry must split
+into exactly as many `|`-delimited subfields as the VCF's `ANN` header declares;
+an entry that does not (e.g. a `|` within a GFF identifier the database was not
+prepared by `prepare_snpeff` to remove) raises an error rather than being
+reported with misassigned fields. A TSV is generated and formatted as follows:
 
 | column | content | example |
 | --- | --- | --- |
@@ -230,7 +234,7 @@ custom genome, `--genome_id`:
 
 | output | content |
 | --- | --- |
-| `<data_dir>/<genome_id>/genes.gff` | the reference GFF's annotation section, without any embedded `##FASTA` section |
+| `<data_dir>/<genome_id>/genes.gff` | the reference GFF's annotation section, without any embedded `##FASTA` section, and with any `\|` in its attributes replaced by `_` (SnpEff copies identifiers such as NCBI's `rna-gnl\|WGS:PGLS\|mrna_CJI97_000402T0` unescaped into its `\|`-delimited `ANN` field, shifting every later subfield) |
 | `--output` (default `snpEff.config`) | a copy of `--template_config` (e.g. the config installed alongside `snpEff.jar`) with `data.dir` pointed at `--data_dir`, the genome registered under `--organism`, and its codon table(s) assigned |
 
 SnpEff reads the genome's sequences from `<data_dir>/<genome_id>/sequences.fa`

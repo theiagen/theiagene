@@ -69,9 +69,31 @@ _PARTIAL_TRANSCRIPT = {"WARNING_TRANSCRIPT_INCOMPLETE", "WARNING_TRANSCRIPT_NO_S
 _UNIT_ID_KEYS = ("ID", "Name", "transcript_id")
 
 
+# the quoted '|'-delimited subfield list SnpEff writes into the ANN header's
+# Description, e.g. "Functional annotations: 'Allele | Annotation | ... '"
+_ANN_HEADER_FIELDS = re.compile(r"'([^']*\|[^']*)'")
+
+
+def ann_header_fields(description: str) -> list:
+    """Return the subfield names SnpEff declares in the ``ANN`` header's
+    ``description``, or an empty list when it declares none."""
+    match = _ANN_HEADER_FIELDS.search(description or "")
+    if not match:
+        return []
+    return [name.strip() for name in match.group(1).split("|")]
+
+
 def iter_annotations(vcf: str):
     """Yield ``(record, entry)`` for every SnpEff ``ANN`` entry of a VCF, where
     ``entry`` maps :data:`_ANN_FIELDS` to that entry's subfields.
+
+    Subfields are assigned by position, so each entry must split on ``|`` into
+    exactly as many subfields as the ``ANN`` header declares. SnpEff does not
+    escape a ``|`` carried by an identifier it copies from the GFF (e.g. NCBI's
+    ``rna-gnl|WGS:PGLS|mrna_CJI97_000402T0``), which would otherwise shift every
+    later subfield -- ``Transcript_BioType`` and ``Rank`` landing in
+    ``HGVS.c``/``HGVS.p`` -- so such an entry raises rather than being misread
+    (``prepare_snpeff`` strips these pipes from the database GFF beforehand).
 
     Records carrying no ``ANN`` (e.g. intergenic variants under
     ``-no-intergenic``) yield nothing."""
@@ -79,9 +101,29 @@ def iter_annotations(vcf: str):
     try:
         if "ANN" not in handle.header.info:
             raise ValueError(f"{vcf} SnpEff annotations (ANN) are not in VCF header")
+        header_fields = ann_header_fields(handle.header.info["ANN"].description)
+        if not header_fields:
+            raise ValueError(
+                f"{vcf} ANN header declares no subfields; expected SnpEff's "
+                "\"Functional annotations: 'Allele | Annotation | ...'\""
+            )
+        if len(header_fields) != len(_ANN_FIELDS):
+            raise ValueError(
+                f"{vcf} ANN header declares {len(header_fields)} subfields; "
+                f"{len(_ANN_FIELDS)} expected: {' | '.join(header_fields)}"
+            )
         for record in handle:
             for raw in record.info.get("ANN") or ():
-                yield record, dict(zip(_ANN_FIELDS, raw.split("|")))
+                subfields = raw.split("|")
+                if len(subfields) != len(header_fields):
+                    raise ValueError(
+                        f"ANN entry at {record.contig}:{record.pos} splits into "
+                        f"{len(subfields)} subfields; the header declares "
+                        f"{len(header_fields)}. A '|' within a GFF identifier "
+                        f"likely shifted them (prepare the database GFF with "
+                        f"prepare_snpeff): {raw}"
+                    )
+                yield record, dict(zip(_ANN_FIELDS, subfields))
     finally:
         handle.close()
 

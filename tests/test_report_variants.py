@@ -10,7 +10,10 @@ _HEADER = "\n".join(
     [
         "##fileformat=VCFv4.2",
         "##contig=<ID=chr1>",
-        '##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations">',
+        '##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: '
+        "'Allele | Annotation | Annotation_Impact | Gene_Name | Gene_ID | Feature_Type | "
+        "Feature_ID | Transcript_BioType | Rank | HGVS.c | HGVS.p | cDNA.pos / cDNA.length | "
+        "CDS.pos / CDS.length | AA.pos / AA.length | Distance | ERRORS / WARNINGS / INFO' \">",
         '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
         '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">',
         '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allele depths">',
@@ -523,3 +526,42 @@ def test_run_cli_prints_tsv_to_stdout_and_suppresses_up_downstream_by_default(
             'protein.A: "protein A" (stop_gained c.9G>A p.Trp3*; G:2 A:40)',
         ]),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# ANN subfield count
+# --------------------------------------------------------------------------- #
+
+def test_ann_header_fields_parses_snpeff_description():
+    fields = rv.ann_header_fields(
+        "Functional annotations: 'Allele | Annotation | Annotation_Impact' "
+    )
+    assert fields == ["Allele", "Annotation", "Annotation_Impact"]
+    assert rv.ann_header_fields("Functional annotations") == []
+
+
+def test_iter_annotations_rejects_entry_shifted_by_pipe_in_identifier(tmp_path):
+    # SnpEff copies an NCBI gnl| transcript ID unescaped into Feature_ID, which
+    # would otherwise read Transcript_BioType/Rank as HGVS.c/HGVS.p
+    shifted = _ann("GC", "frameshift_variant", "rna-gnl|WGS:PGLS|mrna_CJI97_000402T0",
+                   "c.10dupC", "p.Leu4fs")
+    vcf = _write_vcf(tmp_path, [_record(100, "G", "GC", [shifted])])
+    with pytest.raises(ValueError, match="18 subfields; the header declares 16"):
+        list(rv.iter_annotations(vcf))
+
+
+def test_iter_annotations_rejects_header_without_subfields(tmp_path):
+    header = _HEADER.replace(
+        _HEADER.splitlines()[2],
+        '##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations">',
+    )
+    vcf = _write_vcf(tmp_path, [_record(100, "T", "C", [])], header=header)
+    with pytest.raises(ValueError, match="declares no subfields"):
+        list(rv.iter_annotations(vcf))
+
+
+def test_iter_annotations_rejects_header_with_unexpected_subfield_count(tmp_path):
+    header = _HEADER.replace(" | ERRORS / WARNINGS / INFO", "")
+    vcf = _write_vcf(tmp_path, [_record(100, "T", "C", [])], header=header)
+    with pytest.raises(ValueError, match="declares 15 subfields; 16 expected"):
+        list(rv.iter_annotations(vcf))
