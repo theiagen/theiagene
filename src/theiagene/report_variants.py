@@ -123,7 +123,7 @@ def iter_annotations(vcf: str):
                         f"ANN entry at {record.contig}:{record.pos} splits into "
                         f"{len(subfields)} subfields; the header declares "
                         f"{len(header_fields)}. A '|' within a GFF identifier "
-                        f"likely shifted them (prepare the database GFF with "
+                        f"may have shifted them (prepare the database GFF with "
                         f"prepare_snpeff): {raw}"
                     )
                 yield record, dict(zip(_ANN_FIELDS, map(_unescape_gff_attr, subfields)))
