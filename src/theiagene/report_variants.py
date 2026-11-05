@@ -386,7 +386,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     parser.add_argument("--feature_type", default="CDS")
     parser.add_argument("--extragene_variant_buffer", default=5000, type=int,
-                        help="bases +/- gene boundaries to associate a extragene variant with "
+                        help="bases +/- gene boundaries to associate an extragene variant with "
                         "a feature; DEFAULT: 5000")
     parser.add_argument(
         "--output",
@@ -418,7 +418,7 @@ def run_cli(args: argparse.Namespace) -> int:
         qualifiers,
         query_list,
         args.exact_match,
-        args.extragene_variant_buffer,
+        abs(args.extragene_variant_buffer),
     )
 
     tsv = "\n".join(["#" + "\t".join(COLUMNS)] + ["\t".join(record) for record in records])
