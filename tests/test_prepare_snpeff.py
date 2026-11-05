@@ -156,30 +156,36 @@ def test_write_snpeff_config_adds_data_dir_missing_from_template(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# database GFF pipe sanitization
+# database GFF pipe percent-encoding
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize("line, expected, changed", [
-    # NCBI gnl| identifiers lose their pipes in ID and Parent alike
+    # NCBI gnl| identifiers have their pipes encoded in ID and Parent alike
     (
         "c1\tGenbank\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl|WGS:PGLS|mrna_T0;Parent=gene-1\n",
-        "c1\tGenbank\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl_WGS:PGLS_mrna_T0;Parent=gene-1\n",
+        "c1\tGenbank\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl%7CWGS:PGLS%7Cmrna_T0;Parent=gene-1\n",
         True,
     ),
     (
         "c1\tGenbank\tCDS\t1\t9\t.\t-\t0\tID=cds-1;Parent=rna-gnl|WGS:PGLS|mrna_T0\n",
-        "c1\tGenbank\tCDS\t1\t9\t.\t-\t0\tID=cds-1;Parent=rna-gnl_WGS:PGLS_mrna_T0\n",
+        "c1\tGenbank\tCDS\t1\t9\t.\t-\t0\tID=cds-1;Parent=rna-gnl%7CWGS:PGLS%7Cmrna_T0\n",
         True,
+    ),
+    # already-encoded pipes and other encodings are left as they are
+    (
+        "c1\t.\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl%7CWGS;product=a%2Cb\n",
+        "c1\t.\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl%7CWGS;product=a%2Cb\n",
+        False,
     ),
     # comments, directives and pipe-free lines pass through untouched
     ("#comment|with|pipes\n", "#comment|with|pipes\n", False),
     ("c1\t.\tgene\t1\t9\t.\t+\t.\tID=gene-1\n", "c1\t.\tgene\t1\t9\t.\t+\t.\tID=gene-1\n", False),
 ])
-def test_sanitize_gff_line(line, expected, changed):
-    assert ps.sanitize_gff_line(line) == (expected, changed)
+def test_encode_gff_line(line, expected, changed):
+    assert ps.encode_gff_line(line) == (expected, changed)
 
 
-def test_main_strips_pipes_from_database_gff(tmp_path, caplog):
+def test_main_encodes_pipes_in_database_gff(tmp_path, caplog):
     reference = tmp_path / "reference.gff"
     reference.write_text(
         "##gff-version 3\n"
@@ -200,5 +206,6 @@ def test_main_strips_pipes_from_database_gff(tmp_path, caplog):
         ])
     gff = (data_dir / "cauris" / "genes.gff").read_text()
     assert "|" not in gff
-    assert "Parent=rna-gnl_WGS:X_mrna_T0" in gff
+    assert "ID=rna-gnl%7CWGS:X%7Cmrna_T0\n" in gff
+    assert "Parent=rna-gnl%7CWGS:X%7Cmrna_T0;" in gff
     assert "2 GFF feature(s)" in caplog.text

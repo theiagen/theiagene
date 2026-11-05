@@ -565,3 +565,46 @@ def test_iter_annotations_rejects_header_with_unexpected_subfield_count(tmp_path
     vcf = _write_vcf(tmp_path, [_record(100, "T", "C", [])], header=header)
     with pytest.raises(ValueError, match="declares 15 subfields; 16 expected"):
         list(rv.iter_annotations(vcf))
+
+
+def test_iter_annotations_decodes_percent_encoded_pipe(tmp_path):
+    # prepare_snpeff encodes the pipe as %7C, which SnpEff carries into Feature_ID
+    encoded = _ann("GC", "frameshift_variant", "rna-gnl%7CWGS:PGLS%7Cmrna_CJI97_000402T0",
+                   "c.831_832insG", "p.Gln278fs")
+    vcf = _write_vcf(tmp_path, [_record(100, "G", "GC", [encoded])])
+    ((_, entry),) = rv.iter_annotations(vcf)
+    assert entry["Feature_ID"] == "rna-gnl|WGS:PGLS|mrna_CJI97_000402T0"
+    assert (entry["HGVS.c"], entry["HGVS.p"]) == ("c.831_832insG", "p.Gln278fs")
+
+
+# two overlapping transcripts whose encoded gnl| IDs (as prepare_snpeff writes
+# them) differ only after the first pipe
+_ENCODED_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene-a;Name=geneA",
+        "chr1\t.\tmRNA\t1\t1000\t.\t+\t.\tID=rna-gnl%7CWGS:X%7Cmrna_A;Parent=gene-a",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-a;Parent=rna-gnl%7CWGS:X%7Cmrna_A;"
+        "protein_id=prot%7Ca;product=protein A",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene-b;Name=geneB",
+        "chr1\t.\tmRNA\t1\t1000\t.\t+\t.\tID=rna-gnl%7CWGS:X%7Cmrna_B;Parent=gene-b",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-b;Parent=rna-gnl%7CWGS:X%7Cmrna_B;"
+        "product=protein B",
+    ]
+) + "\n"
+
+
+@pytest.mark.parametrize("gff", [_ENCODED_GFF, _ENCODED_GFF.replace("%7C", "|")])
+def test_report_variants_resolves_percent_encoded_pipe_identifiers(tmp_path, gff):
+    # the encoded Feature_ID breaks the tie against the prepared (encoded) GFF
+    # and the unprepared reference alike, and reaches the report as '|'
+    (record,) = _report(tmp_path, [_record(100, "T", "C", [
+        _ann("C", "missense_variant", "rna-gnl%7CWGS:X%7Cmrna_A", "c.428A>G", "p.Lys143Arg"),
+    ])], gff=gff)
+    assert record[:5] == [
+        "protein.A",
+        '"rna-gnl|WGS:X|mrna_A":c.428A>G',
+        "prot|a:p.Lys143Arg",
+        "428A>G",
+        "K143R",
+    ]

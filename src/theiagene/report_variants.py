@@ -36,7 +36,7 @@ import sys
 import logging
 import argparse
 
-from theiagene.lib.feature import FeatureCol
+from theiagene.lib.feature import FeatureCol, _unescape_gff_attr
 from theiagene.lib.parsers import assimilate_gff, import_vcf
 from theiagene.lib.query import (
     ordered_query_genes,
@@ -93,7 +93,10 @@ def iter_annotations(vcf: str):
     ``rna-gnl|WGS:PGLS|mrna_CJI97_000402T0``), which would otherwise shift every
     later subfield -- ``Transcript_BioType`` and ``Rank`` landing in
     ``HGVS.c``/``HGVS.p`` -- so such an entry raises rather than being misread
-    (``prepare_snpeff`` strips these pipes from the database GFF beforehand).
+    (``prepare_snpeff`` percent-encodes these pipes as ``%7C`` in the database
+    GFF beforehand). SnpEff copies GFF values with their percent-encoding
+    intact, so each subfield is decoded as the GFF's attributes are, restoring
+    ``%7C`` to ``|`` and keeping ``Feature_ID`` comparable to the GFF's IDs.
 
     Records carrying no ``ANN`` (e.g. intergenic variants under
     ``-no-intergenic``) yield nothing."""
@@ -123,7 +126,7 @@ def iter_annotations(vcf: str):
                         f"likely shifted them (prepare the database GFF with "
                         f"prepare_snpeff): {raw}"
                     )
-                yield record, dict(zip(_ANN_FIELDS, subfields))
+                yield record, dict(zip(_ANN_FIELDS, map(_unescape_gff_attr, subfields)))
     finally:
         handle.close()
 
