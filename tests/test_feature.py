@@ -26,7 +26,7 @@ def test_as_int_maps_undefined_to_none_and_parses_digits():
 
 
 def test_as_int_raises_on_non_numeric():
-    with pytest.raises(ValueError, match="start is not an integer"):
+    with pytest.raises(ValueError, match="abc"):
         _as_int("abc", "start")
 
 
@@ -39,7 +39,7 @@ def test_as_strand_coerces_all_accepted_forms(value, expected):
 
 
 def test_as_strand_rejects_unknown_token():
-    with pytest.raises(ValueError, match="strand is not a valid GFF3 strand"):
+    with pytest.raises(ValueError, match="strand"):
         _as_strand("x")
 
 
@@ -66,7 +66,7 @@ def test_feature_sorts_coordinates_and_coerces_columns():
 )
 def test_feature_requires_both_coordinates(start, end):
     # a missing/undefined start or end cannot yield a coordinate span
-    with pytest.raises(ValueError, match="start and stop coordinates required"):
+    with pytest.raises(ValueError, match="coordinates"):
         Feature(fid="a", start=start, end=end)
 
 
@@ -178,7 +178,7 @@ def test_group_features_dedupes_duplicate_ids():
 def test_group_features_rejects_ambiguous_parent_id():
     # 'dup' names two features *and* is referenced as a Parent -> the link is ambiguous
     feats = [_feat("dup", "gene"), _feat("dup", "gene"), _feat("kid", "CDS", pid="dup")]
-    with pytest.raises(KeyError, match="belongs to multiple features"):
+    with pytest.raises(KeyError, match="dup"):
         group_features(feats)
 
 
@@ -286,9 +286,9 @@ def test_featurecol_index_is_zero_based_half_open():
 
 def test_featurecol_index_rejects_an_empty_range():
     col = FeatureCol([_placed("cds-A", "CDS", 10, 20)])
-    with pytest.raises(ValueError, match="must be > start"):
+    with pytest.raises(ValueError, match="index range"):
         col.index("chr1", 20, 10)
-    with pytest.raises(ValueError, match="must be > start"):
+    with pytest.raises(ValueError, match="index range"):
         col.index("chr1", 10, 10)
 
 

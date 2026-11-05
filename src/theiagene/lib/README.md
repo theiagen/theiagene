@@ -2,7 +2,7 @@
 
 The feature data model shared by every theiagene command. It turns the flat,
 line-oriented rows of a GFF3 annotation into a navigable tree of genes,
-their RNAs, and the CDS/exon segments beneath them — then lets you reach any
+their RNAs, and the CDS/exon segments beneath them — then lets callers reach any
 class of feature by name, look one up by ID, sort the whole thing into a
 canonical order, and serialize it back out to GFF3.
 
@@ -114,8 +114,8 @@ Feature(fid=None, pid=None, seqid=None, source=None, type=None,
   both-inclusive columns; undefined numeric/strand fields (`score`, `phase`,
   `strand`) render as `.`. The string columns (`seqid`, `source`, `type`) are
   written as-is and have no placeholder — serializing a feature that is missing
-  one raises `TypeError`, so set them on any feature you intend to write back
-  out.
+  one raises `TypeError`, so they must be set on any feature intended to be
+  written back out.
 
 - **`synthesize_id(count) -> str`**
   Assign and return a synthetic `fid` for a record that carried no `ID`, built
@@ -228,8 +228,8 @@ so multi-segment CDS features index distinctly; a `Parent` pointing at a
 duplicated (ambiguous) ID raises `KeyError`. Returns a `{seqid: [Feature, …]}`
 dict.
 
-`FeatureCol` calls this for you on construction — call it directly only when
-working with raw feature lists outside a collection.
+`FeatureCol` calls this on construction, so it only needs to be called directly
+when working with raw feature lists outside a collection.
 
 ---
 

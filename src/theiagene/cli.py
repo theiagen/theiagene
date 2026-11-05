@@ -6,7 +6,7 @@ of which registers its own arguments and runs its own pipeline."""
 import sys
 import argparse
 
-from theiagene import __version__, gene_coverage, extract_variants, report_variants
+from theiagene import __version__, gene_coverage, extract_variants, report_variants, prepare_snpeff
 from theiagene.lib.logging_config import configure_logging
 
 
@@ -25,7 +25,12 @@ _SUBCOMMANDS = (
     (
         "report_variants",
         report_variants,
-        "render VEP variant annotations into product-named report lines",
+        "render SnpEff variant annotations into a product-named report TSV",
+    ),
+    (
+        "prepare_snpeff",
+        prepare_snpeff,
+        "prepare a reference GFF and config for building a SnpEff database",
     ),
 )
 
