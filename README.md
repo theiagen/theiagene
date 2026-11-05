@@ -131,8 +131,8 @@ kept `ANN` entry. `--reference_gff` must be the GFF the SnpEff database was
 built from (see [prepare_snpeff](#prepare_snpeff)). Each `ANN` entry must split
 into exactly as many `|`-delimited subfields as the VCF's `ANN` header declares;
 an entry that does not (e.g. a `|` within a GFF identifier the database was not
-prepared by `prepare_snpeff` to remove) raises an error rather than being
-reported with misassigned fields. A TSV is generated and formatted as follows:
+prepared by `prepare_snpeff` to remove) raises an error. A TSV is generated and 
+formatted as follows:
 
 | column | content | example |
 | --- | --- | --- |

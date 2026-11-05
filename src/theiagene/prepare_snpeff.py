@@ -208,8 +208,7 @@ def run_cli(args: argparse.Namespace) -> int:
     sanitized = write_database_gff(args.reference_gff, gff)
     if sanitized:
         logger.warning(
-            f"replaced '|' with '_' in the attributes of {sanitized} GFF feature(s); "
-            "SnpEff would otherwise shift the ANN subfields of their annotations"
+            f"replaced '|' with '_' in the attributes of {sanitized} GFF feature(s)"
         )
     logger.debug(f"Wrote the GFF annotation section to {gff}")
 
