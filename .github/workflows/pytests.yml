@@ -1,30 +1,34 @@
 name: Theiagene Tests
 
+# Runs the unit and organism tests (tests/data: size-minimized C. auris,
+# A. fumigatus and C. neoformans data) on every push that touches code or tests.
+# Compute is kept minimal: push only (a same-repo PR's checks come from its
+# branch's push run, so no duplicate pull_request run), documentation-only
+# changes skipped, superseded runs on a branch cancelled, one Python version,
+# cached pip downloads, and coverage written to the job summary rather than
+# through a separate action.
 on:
   push:
-    branches: [ main, master ]
     paths:
       - 'src/theiagene/**'
       - 'tests/**'
       - 'conftest.py'
       - 'pyproject.toml'
       - '.github/workflows/pytests.yml'
-  pull_request:
-    branches: [ main, master ]
-    paths:
-      - 'src/theiagene/**'
-      - 'tests/**'
-      - 'conftest.py'
-      - 'pyproject.toml'
-      - '.github/workflows/pytests.yml'
+      - '!**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: write   # required for the coverage comment
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - uses: actions/checkout@v7
@@ -37,16 +41,11 @@ jobs:
         cache-dependency-path: 'pyproject.toml'
 
     - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install -e ".[test]" pytest-cov
+      run: python -m pip install -e ".[test]" pytest-cov
 
     - name: Run tests with coverage
       run: |
-        python -m pytest tests/ --cov=src/theiagene --cov-report "xml:coverage.xml" --cov-report=term-missing:skip-covered --junitxml=junit.xml
-
-    - name: Coverage comment
-      uses: MishaKav/pytest-coverage-comment@v1.12.2
-      with:
-        pytest-xml-coverage-path: ./coverage.xml
-        junitxml-path: ./junit.xml
+        python -m pytest --cov=theiagene --cov-report=term-missing:skip-covered | tee pytest.log
+        status=${PIPESTATUS[0]}
+        { echo '### pytest'; echo '```'; cat pytest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        exit "$status"
