@@ -1,0 +1,129 @@
+{
+  "candidozyma_auris": {
+    "sample": "22-00052321",
+    "organism": "Candidozyma auris",
+    "clade": "Clade3",
+    "translation_table": 12,
+    "variant_caller": "GATK (medea_magic bwa_variant_calling/gatk_filter)",
+    "query_genes": "FKS1,lanosterol.14-alpha.demethylase,uracil.phosphoribosyltransferase,sterol.24-C-methyltransferase,CJI97_000401,CJI97_000402,CJI97_003175,CJI97_003811,CJI97_005426",
+    "sources": {
+      "bam": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/c044d233-88a8-4cb9-a9db-fb53eab1be8c/call-medea_magic/medea_magic/5eced7be-906b-47c4-9c6b-4e796f2e032b/call-bwa_variant_calling/cacheCopy/22-00052321.sorted.aligned.bam",
+      "bai": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/c044d233-88a8-4cb9-a9db-fb53eab1be8c/call-medea_magic/medea_magic/5eced7be-906b-47c4-9c6b-4e796f2e032b/call-bwa_variant_calling/cacheCopy/22-00052321.sorted.aligned.bam.bai",
+      "vcf": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/c044d233-88a8-4cb9-a9db-fb53eab1be8c/call-medea_magic/medea_magic/5eced7be-906b-47c4-9c6b-4e796f2e032b/call-gatk_filter/cacheCopy/22-00052321_selected.vcf.gz",
+      "fasta": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/c044d233-88a8-4cb9-a9db-fb53eab1be8c/call-medea_magic/medea_magic/5eced7be-906b-47c4-9c6b-4e796f2e032b/call-cladetyper/cacheCopy/CAURIS_REFERENCE.fasta",
+      "gff": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/c044d233-88a8-4cb9-a9db-fb53eab1be8c/call-medea_magic/medea_magic/5eced7be-906b-47c4-9c6b-4e796f2e032b/call-cladetyper/cacheCopy/CAURIS_REFERENCE.gff",
+      "terra_snpeff_vcf": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/c044d233-88a8-4cb9-a9db-fb53eab1be8c/call-medea_magic/medea_magic/5eced7be-906b-47c4-9c6b-4e796f2e032b/call-snpeff_gene_variants/22-00052321_extracted_snpeff.vcf"
+    },
+    "terra": {
+      "theiaeuk_illumina_pe_version": "PHB v4.3.0; branch: kzm-fks1_cdc-dev",
+      "analysis_date": "2026-11-05",
+      "gene_coverage_depth_by_gene": {
+        "CJI97_000401": "66.09966777408638",
+        "CJI97_000402": "66.52444444444444",
+        "CJI97_003175": "64.53686396677051",
+        "CJI97_003811": "60.95054945054945",
+        "CJI97_005426": "64.60953608247422",
+        "FKS1": "75.48861831656961",
+        "lanosterol.14-alpha.demethylase": "64.96507936507936",
+        "sterol.24-C-methyltransferase": "71.95833333333333",
+        "uracil.phosphoribosyltransferase": "66.94216133942162"
+      },
+      "gene_coverage_breadth_by_gene": {
+        "CJI97_000401": "100",
+        "CJI97_000402": "100",
+        "CJI97_003175": "100",
+        "CJI97_003811": "100",
+        "CJI97_005426": "100",
+        "FKS1": "100",
+        "lanosterol.14-alpha.demethylase": "100",
+        "sterol.24-C-methyltransferase": "100",
+        "uracil.phosphoribosyltransferase": "100"
+      },
+      "gene_coverage_reads_by_gene": {
+        "CJI97_000401": "464",
+        "CJI97_000402": "574",
+        "CJI97_003175": "483",
+        "CJI97_003811": "507",
+        "CJI97_005426": "1100",
+        "FKS1": "2969",
+        "lanosterol.14-alpha.demethylase": "770",
+        "sterol.24-C-methyltransferase": "602",
+        "uracil.phosphoribosyltransferase": "364"
+      },
+      "gene_coverage_mean_depth": "69.23889104806322",
+      "gene_coverage_mean_percent_coverage": "100.0",
+      "gene_coverage_reads_mapped": "7833",
+      "gene_coverage_query_check_status": "PASS",
+      "snpeff_gene_variants_version": "5.4c"
+    }
+  },
+  "aspergillus_fumigatus": {
+    "sample": "SRR17660939",
+    "organism": "Aspergillus fumigatus",
+    "translation_table": 1,
+    "variant_caller": "GATK (medea_magic bwa_variant_calling/gatk_filter)",
+    "query_genes": "AFUA_4G06890,AFUA_6G05300,AFUA_4G08340",
+    "sources": {
+      "bam": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/d21c9100-e67a-401b-9748-c479feb14cb0/call-medea_magic/medea_magic/49d614a4-d055-443a-a32c-c84b1bd7337f/call-bwa_variant_calling/cacheCopy/SRR17660939.sorted.aligned.bam",
+      "bai": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/d21c9100-e67a-401b-9748-c479feb14cb0/call-medea_magic/medea_magic/49d614a4-d055-443a-a32c-c84b1bd7337f/call-bwa_variant_calling/cacheCopy/SRR17660939.sorted.aligned.bam.bai",
+      "vcf": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/b00888f2-3c5f-476c-9b91-ed15a17dce7e/theiaeuk_illumina_pe/d21c9100-e67a-401b-9748-c479feb14cb0/call-medea_magic/medea_magic/49d614a4-d055-443a-a32c-c84b1bd7337f/call-gatk_filter/cacheCopy/SRR17660939_selected.vcf.gz",
+      "fasta": "gs://theiagen-public-resources-rp/reference_data/eukaryotic/aspergillus/Aspergillus_fumigatus_GCF_000002655.1_ASM265v1_genomic.fasta",
+      "gff": "gs://theiagen-public-resources-rp/reference_data/eukaryotic/aspergillus/Aspergillus_fumigatus_GCF_000002655.1_ASM265v1_genomic.gff"
+    },
+    "terra": {
+      "theiaeuk_illumina_pe_version": "PHB v4.3.0; branch: kzm-fks1_cdc-dev",
+      "analysis_date": "2026-11-05",
+      "gene_coverage_depth_by_gene": {
+        "AFUA_4G06890": "125.63888888888889",
+        "AFUA_4G08340": "140.62248213125406",
+        "AFUA_6G05300": "124.4031862745098"
+      },
+      "gene_coverage_breadth_by_gene": {
+        "AFUA_4G06890": "100",
+        "AFUA_4G08340": "100",
+        "AFUA_6G05300": "100"
+      },
+      "gene_coverage_reads_by_gene": {
+        "AFUA_4G06890": "880",
+        "AFUA_4G08340": "981",
+        "AFUA_6G05300": "588"
+      },
+      "gene_coverage_mean_depth": "131.28875224186524",
+      "gene_coverage_mean_percent_coverage": "100.0",
+      "gene_coverage_reads_mapped": "2449",
+      "gene_coverage_query_check_status": "PASS",
+      "snpeff_gene_variants_version": "5.4c"
+    }
+  },
+  "cryptococcus_neoformans": {
+    "sample": "SRR16002855",
+    "organism": "Cryptococcus neoformans",
+    "translation_table": 1,
+    "variant_caller": "FreeBayes (Snippy; predates medea_magic GATK calling, so the VCF carries RO/AO rather than AD)",
+    "query_genes": "sterol.14-demethylase",
+    "sources": {
+      "bam": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/3e5ab277-4082-4738-8f7f-0f43ae90c30b/theiaeuk_illumina_pe/c423bbaa-4294-48ca-9e50-990598714768/call-medea_magic/medea_magic/f76af721-4177-44b1-869f-23f5d0863811/call-snippy_crypto/glob-385f83aa58841cbf85625c59433f3353/SRR16002855.bam",
+      "bai": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/3e5ab277-4082-4738-8f7f-0f43ae90c30b/theiaeuk_illumina_pe/c423bbaa-4294-48ca-9e50-990598714768/call-medea_magic/medea_magic/f76af721-4177-44b1-869f-23f5d0863811/call-snippy_crypto/glob-385f83aa58841cbf85625c59433f3353/SRR16002855.bam.bai",
+      "vcf": "gs://fc-ea7c0ec3-9dcb-40a4-9ff1-a14099d23e91/submissions/3e5ab277-4082-4738-8f7f-0f43ae90c30b/theiaeuk_illumina_pe/c423bbaa-4294-48ca-9e50-990598714768/call-medea_magic/medea_magic/f76af721-4177-44b1-869f-23f5d0863811/call-snippy_crypto/glob-385f83aa58841cbf85625c59433f3353/SRR16002855.vcf",
+      "fasta": "gs://theiagen-public-resources-rp/reference_data/eukaryotic/cryptococcus/Cryptococcus_neoformans_GCF_000091045.1_ASM9104v1_genomic.fasta",
+      "gff": "gs://theiagen-public-resources-rp/reference_data/eukaryotic/cryptococcus/Cryptococcus_neoformans_GCF_000091045.1_ASM9104v1_genomic.gff"
+    },
+    "contig_rename": {
+      "NC_006670": "NC_006670.1",
+      "NC_006684": "NC_006684.1",
+      "NC_006685": "NC_006685.1",
+      "NC_006686": "NC_006686.1",
+      "NC_006687": "NC_006687.1",
+      "NC_006691": "NC_006691.1",
+      "NC_006692": "NC_006692.1",
+      "NC_006693": "NC_006693.1",
+      "NC_006694": "NC_006694.1",
+      "NC_006679": "NC_006679.1",
+      "NC_006680": "NC_006680.1",
+      "NC_006681": "NC_006681.1",
+      "NC_006682": "NC_006682.1",
+      "NC_006683": "NC_006683.1"
+    },
+    "strip_ann": true
+  }
+}

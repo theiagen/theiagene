@@ -21,6 +21,17 @@ pip install .
 pip install -e '.[test]'
 ```
 
+## Testing
+
+```bash
+pytest
+```
+
+Alongside the unit tests, `tests/test_organisms.py` runs every subcommand over
+size-minimized production data from three TheiaEuk organisms (*Candidozyma
+auris*, *Aspergillus fumigatus*, *Cryptococcus neoformans*); see
+[`tests/data/README.md`](tests/data/README.md) for their provenance.
+
 ## Usage
 
 ### Query and coordinate sources
