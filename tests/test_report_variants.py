@@ -10,7 +10,10 @@ _HEADER = "\n".join(
     [
         "##fileformat=VCFv4.2",
         "##contig=<ID=chr1>",
-        '##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations">',
+        '##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: '
+        "'Allele | Annotation | Annotation_Impact | Gene_Name | Gene_ID | Feature_Type | "
+        "Feature_ID | Transcript_BioType | Rank | HGVS.c | HGVS.p | cDNA.pos / cDNA.length | "
+        "CDS.pos / CDS.length | AA.pos / AA.length | Distance | ERRORS / WARNINGS / INFO' \">",
         '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
         '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">',
         '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allele depths">',
@@ -522,4 +525,86 @@ def test_run_cli_prints_tsv_to_stdout_and_suppresses_up_downstream_by_default(
             "protein.A", "rna-A:c.9G>A", "prot-A:p.Trp3*", "9G>A", "W3*",
             'protein.A: "protein A" (stop_gained c.9G>A p.Trp3*; G:2 A:40)',
         ]),
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# ANN subfield count
+# --------------------------------------------------------------------------- #
+
+def test_ann_header_fields_parses_snpeff_description():
+    fields = rv.ann_header_fields(
+        "Functional annotations: 'Allele | Annotation | Annotation_Impact' "
+    )
+    assert fields == ["Allele", "Annotation", "Annotation_Impact"]
+    assert rv.ann_header_fields("Functional annotations") == []
+
+
+def test_iter_annotations_rejects_entry_shifted_by_pipe_in_identifier(tmp_path):
+    # SnpEff copies an NCBI gnl| transcript ID unescaped into Feature_ID, which
+    # would otherwise read Transcript_BioType/Rank as HGVS.c/HGVS.p
+    shifted = _ann("GC", "frameshift_variant", "rna-gnl|WGS:PGLS|mrna_CJI97_000402T0",
+                   "c.10dupC", "p.Leu4fs")
+    vcf = _write_vcf(tmp_path, [_record(100, "G", "GC", [shifted])])
+    with pytest.raises(ValueError, match="18 subfields; the header declares 16"):
+        list(rv.iter_annotations(vcf))
+
+
+def test_iter_annotations_rejects_header_without_subfields(tmp_path):
+    header = _HEADER.replace(
+        _HEADER.splitlines()[2],
+        '##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations">',
+    )
+    vcf = _write_vcf(tmp_path, [_record(100, "T", "C", [])], header=header)
+    with pytest.raises(ValueError, match="declares no subfields"):
+        list(rv.iter_annotations(vcf))
+
+
+def test_iter_annotations_rejects_header_with_unexpected_subfield_count(tmp_path):
+    header = _HEADER.replace(" | ERRORS / WARNINGS / INFO", "")
+    vcf = _write_vcf(tmp_path, [_record(100, "T", "C", [])], header=header)
+    with pytest.raises(ValueError, match="declares 15 subfields; 16 expected"):
+        list(rv.iter_annotations(vcf))
+
+
+def test_iter_annotations_decodes_percent_encoded_pipe(tmp_path):
+    # prepare_snpeff encodes the pipe as %7C, which SnpEff carries into Feature_ID
+    encoded = _ann("GC", "frameshift_variant", "rna-gnl%7CWGS:PGLS%7Cmrna_CJI97_000402T0",
+                   "c.831_832insG", "p.Gln278fs")
+    vcf = _write_vcf(tmp_path, [_record(100, "G", "GC", [encoded])])
+    ((_, entry),) = rv.iter_annotations(vcf)
+    assert entry["Feature_ID"] == "rna-gnl|WGS:PGLS|mrna_CJI97_000402T0"
+    assert (entry["HGVS.c"], entry["HGVS.p"]) == ("c.831_832insG", "p.Gln278fs")
+
+
+# two overlapping transcripts whose encoded gnl| IDs (as prepare_snpeff writes
+# them) differ only after the first pipe
+_ENCODED_GFF = "\n".join(
+    [
+        "##gff-version 3",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene-a;Name=geneA",
+        "chr1\t.\tmRNA\t1\t1000\t.\t+\t.\tID=rna-gnl%7CWGS:X%7Cmrna_A;Parent=gene-a",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-a;Parent=rna-gnl%7CWGS:X%7Cmrna_A;"
+        "protein_id=prot%7Ca;product=protein A",
+        "chr1\t.\tgene\t1\t1000\t.\t+\t.\tID=gene-b;Name=geneB",
+        "chr1\t.\tmRNA\t1\t1000\t.\t+\t.\tID=rna-gnl%7CWGS:X%7Cmrna_B;Parent=gene-b",
+        "chr1\t.\tCDS\t1\t1000\t.\t+\t0\tID=cds-b;Parent=rna-gnl%7CWGS:X%7Cmrna_B;"
+        "product=protein B",
+    ]
+) + "\n"
+
+
+@pytest.mark.parametrize("gff", [_ENCODED_GFF, _ENCODED_GFF.replace("%7C", "|")])
+def test_report_variants_resolves_percent_encoded_pipe_identifiers(tmp_path, gff):
+    # the encoded Feature_ID breaks the tie against the prepared (encoded) GFF
+    # and the unprepared reference alike, and reaches the report as '|'
+    (record,) = _report(tmp_path, [_record(100, "T", "C", [
+        _ann("C", "missense_variant", "rna-gnl%7CWGS:X%7Cmrna_A", "c.428A>G", "p.Lys143Arg"),
+    ])], gff=gff)
+    assert record[:5] == [
+        "protein.A",
+        '"rna-gnl|WGS:X|mrna_A":c.428A>G',
+        "prot|a:p.Lys143Arg",
+        "428A>G",
+        "K143R",
     ]

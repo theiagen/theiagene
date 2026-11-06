@@ -242,5 +242,6 @@ when working with raw feature lists outside a collection.
 - **Undefined** GFF fields (`.`, `?`, `""`, `None`) normalize to `None` (or `{}`
   for attributes).
 - **Attribute (column 9)** parsing/serialization percent-encodes the GFF3
-  reserved characters (`% ; = & ,` tab/newline/CR); `%` is handled first so
+  reserved characters (`% ; = & ,` tab/newline/CR), plus `|` (as `%7C`, which
+  SnpEff carries intact into its `|`-delimited `ANN` field); `%` is handled first so
   escapes are not double-encoded.
