@@ -10,10 +10,12 @@ _STRAND_REVERSE = {1: "+", -1: "-"}
 _UNDEFINED = {".", "?", "", None}
 
 # GFF3 column-9 reserved characters and their percent-encodings; '%' is listed
-# first so the escapes introduced below are not themselves re-encoded
+# first so the escapes introduced below are not themselves re-encoded. '|' is
+# not reserved by GFF3 but is encoded too: SnpEff copies attribute values
+# verbatim into its '|'-delimited ANN field (see prepare_snpeff)
 _GFF_ATTR_ESCAPES = (
     ("%", "%25"), (";", "%3B"), ("=", "%3D"), ("&", "%26"), (",", "%2C"),
-    ("\t", "%09"), ("\n", "%0A"), ("\r", "%0D"),
+    ("\t", "%09"), ("\n", "%0A"), ("\r", "%0D"), ("|", "%7C"),
 )
 
 

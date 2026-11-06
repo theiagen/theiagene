@@ -153,3 +153,59 @@ def test_write_snpeff_config_adds_data_dir_missing_from_template(tmp_path):
     lines = _write_config(tmp_path, template)
     assert lines.count(f"data.dir = {tmp_path / 'snpeff_data'}/") == 1
     assert "cauris.genome : Candidozyma auris" in lines
+
+
+# --------------------------------------------------------------------------- #
+# database GFF pipe percent-encoding
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("line, expected, changed", [
+    # NCBI gnl| identifiers have their pipes encoded in ID and Parent alike
+    (
+        "c1\tGenbank\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl|WGS:PGLS|mrna_T0;Parent=gene-1\n",
+        "c1\tGenbank\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl%7CWGS:PGLS%7Cmrna_T0;Parent=gene-1\n",
+        True,
+    ),
+    (
+        "c1\tGenbank\tCDS\t1\t9\t.\t-\t0\tID=cds-1;Parent=rna-gnl|WGS:PGLS|mrna_T0\n",
+        "c1\tGenbank\tCDS\t1\t9\t.\t-\t0\tID=cds-1;Parent=rna-gnl%7CWGS:PGLS%7Cmrna_T0\n",
+        True,
+    ),
+    # already-encoded pipes and other encodings are left as they are
+    (
+        "c1\t.\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl%7CWGS;product=a%2Cb\n",
+        "c1\t.\tmRNA\t1\t9\t.\t-\t.\tID=rna-gnl%7CWGS;product=a%2Cb\n",
+        False,
+    ),
+    # comments, directives and pipe-free lines pass through untouched
+    ("#comment|with|pipes\n", "#comment|with|pipes\n", False),
+    ("c1\t.\tgene\t1\t9\t.\t+\t.\tID=gene-1\n", "c1\t.\tgene\t1\t9\t.\t+\t.\tID=gene-1\n", False),
+])
+def test_encode_gff_line(line, expected, changed):
+    assert ps.encode_gff_line(line) == (expected, changed)
+
+
+def test_main_encodes_pipes_in_database_gff(tmp_path, caplog):
+    reference = tmp_path / "reference.gff"
+    reference.write_text(
+        "##gff-version 3\n"
+        "c1\tGenbank\tmRNA\t1\t300\t.\t+\t.\tID=rna-gnl|WGS:X|mrna_T0\n"
+        "c1\tGenbank\tCDS\t1\t300\t.\t+\t0\tID=cds-1;Parent=rna-gnl|WGS:X|mrna_T0;transl_table=12\n"
+    )
+    template = tmp_path / "template.config"
+    template.write_text(_TEMPLATE)
+    data_dir = tmp_path / "snpeff_data"
+    with caplog.at_level(logging.WARNING):
+        ps.main([
+            "--reference_gff", str(reference),
+            "--template_config", str(template),
+            "--data_dir", str(data_dir),
+            "--genome_id", "cauris",
+            "--organism", "Candidozyma auris",
+            "--output", str(tmp_path / "snpEff.config"),
+        ])
+    gff = (data_dir / "cauris" / "genes.gff").read_text()
+    assert "|" not in gff
+    assert "ID=rna-gnl%7CWGS:X%7Cmrna_T0\n" in gff
+    assert "Parent=rna-gnl%7CWGS:X%7Cmrna_T0;" in gff
+    assert "2 GFF feature(s)" in caplog.text

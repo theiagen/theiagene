@@ -5,7 +5,9 @@ reference sequences, under a config that registers the genome. This command:
 
 - writes the GFF's annotation section to ``<data_dir>/<genome_id>/genes.gff``,
   dropping any embedded ``##FASTA`` section (SnpEff reads the sequences from
-  the reference FASTA instead)
+  the reference FASTA instead) and percent-encoding any ``|`` in its attributes
+  as ``%7C`` (SnpEff would copy it verbatim into the ``|``-delimited ``ANN``
+  field)
 - writes a config derived from ``--template_config`` (retaining its codon tables
   and settings) that points ``data.dir`` at ``--data_dir``, registers the genome
   under ``--organism``, and assigns its codon table(s)
@@ -101,6 +103,39 @@ def codon_table_lines(genome_id: str, reference_gff: str, translation_table: int
     return lines
 
 
+def encode_gff_line(line: str) -> tuple:
+    """Return ``(line, changed)`` with each ``|`` in a GFF feature line's
+    attribute column percent-encoded as ``%7C``.
+
+    SnpEff copies GFF identifiers (gene/transcript IDs and names) verbatim into
+    its ``|``-delimited ``ANN`` subfields, so a pipe within one -- e.g. NCBI's
+    ``ID=rna-gnl|WGS:PGLS|mrna_CJI97_000402T0`` -- shifts every later subfield
+    of the annotation. ``%7C`` passes through SnpEff intact and is decoded back
+    to ``|`` by ``report_variants``, as by any GFF3 parser. Encoding across the
+    attribute column keeps ``ID`` and ``Parent`` references consistent with one
+    another. Comment, directive and malformed lines are returned unchanged."""
+    if line.startswith("#"):
+        return line, False
+    fields = line.rstrip("\n").split("\t")
+    if len(fields) != 9 or "|" not in fields[8]:
+        return line, False
+    fields[8] = fields[8].replace("|", "%7C")
+    return "\t".join(fields) + ("\n" if line.endswith("\n") else ""), True
+
+
+def write_database_gff(reference_gff: str, output: str) -> int:
+    """Write ``reference_gff``'s annotation section to ``output`` with pipes in
+    its attributes percent-encoded (see :func:`encode_gff_line`), returning the
+    number of feature lines changed."""
+    changed = 0
+    with open(output, "w") as out:
+        for line in iter_gff_lines(reference_gff):
+            line, was_changed = encode_gff_line(line)
+            changed += was_changed
+            out.write(line)
+    return changed
+
+
 def write_snpeff_config(template_config: str, output: str, data_dir: str, genome_id: str,
                         organism: str, codon_lines: list) -> None:
     """Copy ``template_config`` to ``output``, pointing ``data.dir`` at
@@ -172,8 +207,9 @@ def run_cli(args: argparse.Namespace) -> int:
     genome_dir = os.path.join(args.data_dir, args.genome_id)
     os.makedirs(genome_dir, exist_ok=True)
     gff = os.path.join(genome_dir, "genes.gff")
-    with open(gff, "w") as out:
-        out.writelines(iter_gff_lines(args.reference_gff))
+    encoded = write_database_gff(args.reference_gff, gff)
+    if encoded:
+        logger.warning(f"percent-encoded '|' as '%7C' in the attributes of {encoded} GFF feature(s)")
     logger.debug(f"Wrote the GFF annotation section to {gff}")
 
     write_snpeff_config(
