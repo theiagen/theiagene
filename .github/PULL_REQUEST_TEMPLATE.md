@@ -46,10 +46,7 @@ This PR is backwards incompatible (CLI arguments, output files, or library API):
   <!-- That workflow only triggers on changes under src/theiagene/**, tests/**,
        conftest.py, or pyproject.toml. If it didn't run for this PR, say so here. -->
 - [ ] **Test coverage** — new or updated tests added under `tests/` for the changed behavior
-- [ ] **Version bump** — `version` bumped in **both** `pyproject.toml` and `src/theiagene/__init__.py`, or intentionally left alone (state why)
-  <!-- The Docker workflow fails if the release tag doesn't match pyproject.toml,
-       and `theiagene --version` reads __init__.py, so the two must agree. -->
-- [ ] **Docker build** — `docker build --target test .` succeeds (runs pytest inside the image) and `docker build -t theiagene:pr . && docker run --rm theiagene:pr theiagene --version` prints the expected version
+- [ ] **Version bump** — `version` bumped in **both** `pyproject.toml`, `Dockerfile`, and `src/theiagene/__init__.py`; state why if not
 - [ ] **Live run** — exercised on real data or inside the consuming WDL task, where applicable (describe above)
 
 ### Suggested scenarios for the reviewer to test
