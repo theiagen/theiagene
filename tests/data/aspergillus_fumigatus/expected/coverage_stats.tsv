@@ -1,0 +1,4 @@
+#query	average_depth	percent_coverage	reads_mapped	reads_mapped_pass	quantified_length
+AFUA_4G06890	125.63888888888889	100.0	880	True	1548
+AFUA_4G08340	140.62248213125406	100.0	981	True	1539
+AFUA_6G05300	124.4031862745098	100.0	588	True	816
