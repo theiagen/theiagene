@@ -135,7 +135,7 @@ def quantify_gene_coverage(
     min_base_quality: int = 0,
     expected_labels: list = None,
     min_mapping_quality: int = 0,
-    decimal_places: int = 2,
+    decimal_places: int = 18,
 ) -> tuple:
     """Quantify breadth/depth of coverage, mapped reads, and quantified length
     over query-gene coordinates.
@@ -214,20 +214,20 @@ def quantify_gene_coverage(
                     # base is considered covered if beyond minimum depth
                     if base_depth >= min_depth:
                         covered_bases += 1
-        depth_dict[label] = summed_depth / total_bases
+        depth_dict[label] = round(summed_depth / total_bases, decimal_places)
         # breadth is percent of covered bases exceeding min_depth
-        coverage_dict[label] = 100 * (covered_bases / total_bases)
+        coverage_dict[label] = round(100 * (covered_bases / total_bases), decimal_places)
         # reads mapped anywhere across this label's pooled ranges
         reads_dict[label] = len(read_ids)
         # the bases the two ratios above were taken over -- post-union, so a
         # base shared by overlapping ranges is counted once here too
-        lengths_dict[label] = total_bases
+        lengths_dict[label] = round(total_bases, decimal_places)
 
     return (
-        dict(sorted({k: round(v, decimal_places) for k, v in depth_dict.items()})),
-        dict(sorted({k: round(v, decimal_places) for k, v in coverage_dict.items()})),
-        dict(sorted({k: round(v, decimal_places) for k, v in reads_dict.items()})),
-        dict(sorted({k: round(v, decimal_places) for k, v in lengths_dict.items()})),
+        dict(sorted(depth_dict.items())),
+        dict(sorted(coverage_dict.items())),
+        dict(sorted(reads_dict.items())),
+        dict(sorted(lengths_dict.items())),
     )
 
 
@@ -395,7 +395,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--decimal_places",
         type=int,
-        default=2,
+        # default exceeds floating point precision
+        default=18,
         help="number of digits beyond the decimal to write"
     )
     return parser
