@@ -135,6 +135,7 @@ def quantify_gene_coverage(
     min_base_quality: int = 0,
     expected_labels: list = None,
     min_mapping_quality: int = 0,
+    decimal_places: int = 2,
 ) -> tuple:
     """Quantify breadth/depth of coverage, mapped reads, and quantified length
     over query-gene coordinates.
@@ -223,10 +224,10 @@ def quantify_gene_coverage(
         lengths_dict[label] = total_bases
 
     return (
-        dict(sorted(depth_dict.items())),
-        dict(sorted(coverage_dict.items())),
-        dict(sorted(reads_dict.items())),
-        dict(sorted(lengths_dict.items())),
+        dict(sorted({k: round(v, decimal_places) for k, v in depth_dict.items()})),
+        dict(sorted({k: round(v, decimal_places) for k, v in coverage_dict.items()})),
+        dict(sorted({k: round(v, decimal_places) for k, v in reads_dict.items()})),
+        dict(sorted({k: round(v, decimal_places) for k, v in lengths_dict.items()})),
     )
 
 
@@ -391,6 +392,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         help="minimum mapped reads for a query gene to pass (reported alongside "
         "the measurements, which are never filtered)",
     )
+    parser.add_argument(
+        "--decimal_places",
+        type=int,
+        default=2,
+        help="number of digits beyond the decimal to write"
+    )
     return parser
 
 
@@ -443,7 +450,8 @@ def run_cli(args: argparse.Namespace) -> int:
     # already keyed by its own label, which may carry a paralog suffix
     depth_dict, coverage_dict, reads_dict, lengths_dict = quantify_gene_coverage(
         imported_bam, contig2ranges, args.min_depth, args.min_base_quality,
-        unresolved_queries(query_list, contig2ranges), args.min_mapping_quality
+        unresolved_queries(query_list, contig2ranges), args.min_mapping_quality,
+        args.decimal_places
     )
     pass_dict = flag_reads_mapped(reads_dict, args.min_reads_mapped)
     write_json("DEPTH_DICT.json", depth_dict)
