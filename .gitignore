@@ -29,3 +29,6 @@ DEPTH_DICT.json
 COVERAGE_DICT.json
 GENE_VARIANTS.vcf
 VARIANT_ANNOTATIONS.txt
+
+# bioforklift
+**bioforklift.log
