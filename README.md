@@ -168,9 +168,8 @@ Each report line has the form `label: "product" (consequence HGVS.c HGVS.p; dept
 
 - **label**: the `--query_genes` term that matched the feature, or the `--bedfile`
   name if there is no query term.
-  If nothing matches and no feature overlapping the variant answers to the
-  region name(s) `extract_variants` wrote to its `GENE` INFO field, the variant
-  was retrieved by BED coordinates (`--bedfile` alone), so those names label it,
+  If nothing matches and no feature overlapping the variant corresponds to the 
+  region name(s) in the VCF `GENE` INFO field, the `--bedfile` alone names become the label,
   `/`-joined (e.g. `TAC1b_hotspot: "CJI97_000402" (...)`).
   Otherwise, the label is the
   normalized product name
