@@ -1,4 +1,4 @@
-ARG THEIAGENE_VER="1.1.2"
+ARG THEIAGENE_VER="1.1.3"
 
 ### start of app stage ###
 FROM python:3.12-slim AS app
