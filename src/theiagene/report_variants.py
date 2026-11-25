@@ -10,8 +10,10 @@ hierarchy, and leads the HGVS changes with a single gene label, e.g.::
 The label is the ``--query_genes`` term that matches the entry's feature -- the
 name the caller asked about, not the full product it resolved to -- and the
 product follows in quotes so a name carrying commas survives being joined into
-a comma-delimited report. Without ``--query_genes`` (or when none match) the
-label falls back to the normalized product name. The trailing per-allele read
+a comma-delimited report. When no query term matches, a variant that
+``extract_variants`` retrieved by a BED region the GFF carries no name for is
+labelled by that region's name (its ``GENE`` INFO field); otherwise the label
+falls back to the normalized product name. The trailing per-allele read
 depths are read off the annotated record's own sample (``AD``, else
 ``RO``/``AO``) and are omitted when it carries neither.
 
@@ -206,6 +208,37 @@ def _query_label(feature, query_list: list, qualifiers: list, exact_match: bool)
     return match_query(query_list, feature_identifiers(feature, qualifiers), exact_match)
 
 
+def _region_label(record, units: list, query_list: list, qualifiers: list,
+                  exact_match: bool):
+    """Return the region name(s) labelling a variant extracted by BED
+    coordinates, '/'-joined, or None.
+
+    ``extract_variants`` tags each record with the name(s) of the query
+    range(s) it overlaps in a ``GENE`` INFO field. A variant extracted through
+    a GFF feature overlaps a unit answering to one of those names (or to a query
+    term), so None is returned: the name belongs to that unit, not to an
+    overlapping neighbour whose entry is being labelled. Only when no unit
+    overlapping the variant answers to any of them was the variant extracted by
+    a BED region named for something the GFF does not carry (e.g.
+    ``TAC1b_hotspot``), and the region name(s) label it. None is also returned
+    for a record carrying no ``GENE`` field."""
+    try:
+        names = record.info.get("GENE")
+    except (KeyError, ValueError):
+        # GENE is not declared in the VCF header
+        return None
+    if not names:
+        return None
+    names = [names] if isinstance(names, str) else list(names)
+    candidates = list(query_list or ()) + names
+    if any(
+        match_query(candidates, feature_identifiers(unit, qualifiers), exact_match)
+        for unit in units
+    ):
+        return None
+    return "/".join(names)
+
+
 # HGVS three-letter amino acid codes -> their one-letter abbreviations
 _AA_CODES = {
     "Ala": "A", "Arg": "R", "Asn": "N", "Asp": "D", "Cys": "C",
@@ -315,8 +348,9 @@ def report_variants(
     unit overlaps it, because several do and none answers to the entry's
     ``Feature_ID`` (see :func:`_select_unit`), or because the resolved unit
     carries no qualifier. Each kept record is labelled with the ``query_list``
-    term that matched the entry's unit, falling back to the product-derived
-    label when no query matched.
+    term that matched the entry's unit, else the BED region name(s) the
+    variant was extracted by (see :func:`_region_label`), else the
+    product-derived label.
 
     HGVS.c is prefixed with the transcript's ``Feature_ID`` and HGVS.p with its
     CDS ``protein_id`` (else the ``Feature_ID``), an identifier containing ``:``
@@ -374,12 +408,15 @@ def report_variants(
             )
             continue
         label = _query_label(feature, query_list, qualifiers, exact_match)
-        if query_list and label is None:
-            logger.warning(
-                f"no query gene matched {entry['Feature_ID']}; labelling variant "
-                f"{variant} by its product instead"
-            )
-        label = label or normalize_name(qualifier_hit)
+        if label is None:
+            label = _region_label(record, units, query_list, qualifiers, exact_match)
+        if label is None:
+            if query_list:
+                logger.warning(
+                    f"no query gene matched {entry['Feature_ID']}; labelling variant "
+                    f"{variant} by its product instead"
+                )
+            label = normalize_name(qualifier_hit)
         protein_id = _type_qualifier(feature, feature_type, ["protein_id"]) or entry["Feature_ID"]
         records.append([
             label,

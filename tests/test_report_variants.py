@@ -180,10 +180,11 @@ _GFF = "\n".join(
 _FKS1 = '"1,3-beta-glucan synthase component FKS1"'
 
 
-def _report(tmp_path, records, gff=_GFF, suppress=(), qualifiers=("product",), **kwargs):
+def _report(tmp_path, records, gff=_GFF, suppress=(), qualifiers=("product",),
+            header=_HEADER, **kwargs):
     gff_path = tmp_path / "reference.gff"
     gff_path.write_text(gff)
-    vcf = _write_vcf(tmp_path, records)
+    vcf = _write_vcf(tmp_path, records, header=header)
     return rv.report_variants(
         vcf, assimilate_gff(str(gff_path)), set(suppress), "CDS", list(qualifiers), **kwargs
     )
@@ -356,6 +357,74 @@ def test_report_variants_selected_unit_drives_the_query_label(overlapping):
     (report,) = overlapping("ERG11-T1", qualifiers=("product", "Name"),
                             query_list=["ERG11"])
     assert report[1].startswith('ERG11: "lanosterol 14-alpha demethylase" ')
+
+
+# --------------------------------------------------------------------------- #
+# region labels (extract_variants' GENE INFO field)
+# --------------------------------------------------------------------------- #
+
+_GENE_HEADER = _HEADER.replace(
+    "##FORMAT=<ID=GT,",
+    '##INFO=<ID=GENE,Number=.,Type=String,Description="Query gene(s)">\n'
+    "##FORMAT=<ID=GT,",
+)
+
+
+def _tag_gene(record, *names):
+    """Prefix a record's INFO with the GENE field extract_variants writes"""
+    return record.replace("\tANN=", f"\tGENE={','.join(names)};ANN=", 1)
+
+
+def test_report_variants_labels_bed_extracted_variant_by_region_name(tmp_path):
+    # a BED region named for nothing in the GFF: no unit answers to the name,
+    # so the region labels the line instead of the product
+    records = _report(tmp_path, [_tag_gene(_SYNONYMOUS, "TAC1b_hotspot")],
+                      header=_GENE_HEADER, query_list=["TAC1b_hotspot"])
+    assert records[0][0] == "TAC1b_hotspot"
+    assert records[0][-1].startswith(f"TAC1b_hotspot: {_FKS1} (")
+
+
+def test_report_variants_joins_overlapping_region_names(tmp_path):
+    records = _report(tmp_path, [_tag_gene(_SYNONYMOUS, "hotspot1", "hotspot2")],
+                      header=_GENE_HEADER)
+    assert records[0][0] == "hotspot1/hotspot2"
+
+
+def test_report_variants_query_match_takes_precedence_over_region_name(tmp_path):
+    # a BED name that is also a GFF identifier labels the line as a query term
+    records = _report(tmp_path, [_tag_gene(_SYNONYMOUS, "FKS1")],
+                      header=_GENE_HEADER, query_list=["FKS1"])
+    assert records[0][0] == "FKS1"
+
+
+def test_report_variants_region_name_of_overlapping_unit_does_not_label_neighbour(
+    tmp_path,
+):
+    # the variant was extracted through FKS1, so the ERG11 transcript's entry
+    # at the same locus keeps its product label rather than borrowing 'FKS1',
+    # whether or not the query list is given
+    record = _tag_gene(_record(100, "T", "C", [
+        _ann("C", "missense_variant", "rna-a", "c.428A>G", "p.Lys143Arg"),
+        _ann("C", "missense_variant", "rna-b", "c.572T>C", "p.Leu191Pro"),
+    ]), "FKS1")
+    erg11 = "lanosterol.14-alpha.demethylase"
+    for query_list, fks1 in (([], "1.3-beta-glucan.synthase.component.FKS1"),
+                             (["FKS1"], "FKS1")):
+        records = _report(tmp_path, [record], gff=_OVERLAP_GFF,
+                          header=_GENE_HEADER, query_list=query_list)
+        assert [reported[0] for reported in records] == [fks1, erg11]
+
+
+def test_run_cli_labels_bed_extracted_variant_by_region_name(tmp_path, capsys):
+    bed = tmp_path / "regions.bed"
+    bed.write_text("chr1\t90\t110\tTAC1b_hotspot\n")
+    gff_path = tmp_path / "reference.gff"
+    gff_path.write_text(_GFF)
+    vcf = _write_vcf(tmp_path, [_tag_gene(_SYNONYMOUS, "TAC1b_hotspot")],
+                     header=_GENE_HEADER)
+    rv.main(["--vcf", vcf, "--reference_gff", str(gff_path), "--bedfile", str(bed)])
+    _, record = capsys.readouterr().out.splitlines()
+    assert record.split("\t")[0] == "TAC1b_hotspot"
 
 
 # Ensembl-style identifiers carry their own ':'; the CDS lacks a protein_id, so

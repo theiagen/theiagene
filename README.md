@@ -168,7 +168,11 @@ Each report line has the form `label: "product" (consequence HGVS.c HGVS.p; dept
 
 - **label**: the `--query_genes` term that matched the feature, or the `--bedfile`
   name if there is no query term.
-  If there is no query list or match, the label is the
+  If nothing matches and no feature overlapping the variant answers to the
+  region name(s) `extract_variants` wrote to its `GENE` INFO field, the variant
+  was retrieved by BED coordinates (`--bedfile` alone), so those names label it,
+  `/`-joined (e.g. `TAC1b_hotspot: "CJI97_000402" (...)`).
+  Otherwise, the label is the
   normalized product name
   (e.g. `lanosterol.14-alpha.demethylase: "lanosterol 14-alpha demethylase" (...)`).
 - **product**: the CDS product from the reference GFF. It is quoted so commas
